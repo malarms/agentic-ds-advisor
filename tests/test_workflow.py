@@ -76,3 +76,37 @@ def test_workflow_returns_clarification_without_running_tools():
     assert result["plan"].needs_clarification is True
     assert result["results"] == {}
     assert result["plan"].clarification_question is not None
+
+def test_workflow_records_tool_failure_and_continues(monkeypatch):
+    import app.agents.workflow as workflow
+
+    def failing_profile(df):
+        raise RuntimeError("Simulated profiling failure")
+
+    monkeypatch.setattr(workflow, "profile_dataset", failing_profile)
+
+    df = pd.DataFrame(
+        {
+            "age": [22, 25, 30, 35],
+            "income": [30000, 45000, 50000, 60000],
+        }
+    )
+
+    result = run_analysis(
+        request="Profile the dataset and check data quality.",
+        df=df,
+        llm=make_fake_llm(["profile", "data_quality"]),
+    )
+
+    assert result["execution_status"]["profile"]["status"] == "failed"
+    assert (
+        "Simulated profiling failure"
+        in result["execution_status"]["profile"]["error"]
+    )
+
+    # The independent data-quality tool should still execute.
+    assert result["execution_status"]["data_quality"]["status"] == "success"
+    assert "data_quality" in result["results"]
+
+    # Failed results must not be represented as successful output.
+    assert "profile" not in result["results"]

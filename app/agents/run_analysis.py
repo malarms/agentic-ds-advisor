@@ -62,11 +62,12 @@ def main():
     report_path = reports_dir / "analysis_results.json"
 
     report = {
-        "dataset": str(csv_path),
-        "row_count": len(df),
-        "column_count": len(df.columns),
-        "plan": output["plan"].model_dump(),
-        "results": output["results"],
+    "dataset": str(csv_path),
+    "row_count": len(df),
+    "column_count": len(df.columns),
+    "plan": output["plan"].model_dump(),
+    "execution_status": output["execution_status"],
+    "results": output["results"],
     }
 
     report_path.write_text(
@@ -78,16 +79,15 @@ def main():
         encoding="utf-8",
     )
 
-    print("\n--- Analysis plan ---")
-    print(output["plan"].model_dump_json(indent=2))
-
     if output["plan"].needs_clarification:
         print("\nClarification required:")
         print(output["plan"].clarification_question)
     else:
-        print("\nExecuted result sections:")
-        for section in output["results"]:
-            print(f"- {section}")
+        print("\nExecution status:")
+        for step, details in output["execution_status"].items():
+            print(f"- {step}: {details['status']}")
+            if "error" in details:
+                print(f"  Error: {details['error']}")
 
     print(f"\nSaved report to: {report_path}")
 

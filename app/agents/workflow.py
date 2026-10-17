@@ -1,5 +1,5 @@
 
-from typing import Any, TypedDict
+from typing import Any, Callable, TypedDict
 
 import pandas as pd
 from langgraph.graph import END, START, StateGraph
@@ -19,6 +19,50 @@ class AnalysisState(TypedDict, total=False):
     df: pd.DataFrame
     plan: AnalysisPlan
     results: dict[str, Any]
+    execution_status: dict[str, dict[str, str]]
+
+
+def execute_step(
+    state: AnalysisState,
+    step: str,
+    operation: Callable[[], Any],
+) -> dict:
+    """Run one requested tool and record its success or failure."""
+
+    results = dict(state.get("results", {}))
+    statuses = dict(state.get("execution_status", {}))
+    plan = state["plan"]
+
+    if plan.needs_clarification:
+        statuses[step] = {
+            "status": "blocked_by_clarification",
+        }
+        return {
+            "results": results,
+            "execution_status": statuses,
+        }
+
+    if step not in plan.steps:
+        statuses[step] = {"status": "skipped"}
+        return {
+            "results": results,
+            "execution_status": statuses,
+        }
+
+    try:
+        results[step] = operation()
+        statuses[step] = {"status": "success"}
+    except Exception as exc:
+        # Record the failure explicitly and let independent steps continue.
+        statuses[step] = {
+            "status": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+    return {
+        "results": results,
+        "execution_status": statuses,
+    }
 
 
 def build_analysis_graph(llm=None):
@@ -36,58 +80,46 @@ def build_analysis_graph(llm=None):
         return {
             "plan": plan,
             "results": {},
+            "execution_status": {},
         }
 
     def profile_node(state: AnalysisState) -> dict:
-        plan = state["plan"]
-
-        if plan.needs_clarification or "profile" not in plan.steps:
-            return {}
-
-        results = dict(state.get("results", {}))
-        results["profile"] = profile_dataset(state["df"])
-
-        return {"results": results}
+        return execute_step(
+            state,
+            "profile",
+            lambda: profile_dataset(state["df"]),
+        )
 
     def data_quality_node(state: AnalysisState) -> dict:
-        plan = state["plan"]
-
-        if plan.needs_clarification or "data_quality" not in plan.steps:
-            return {}
-
-        results = dict(state.get("results", {}))
-        results["data_quality"] = analyze_data_quality(state["df"])
-
-        return {"results": results}
+        return execute_step(
+            state,
+            "data_quality",
+            lambda: analyze_data_quality(state["df"]),
+        )
 
     def eda_node(state: AnalysisState) -> dict:
-        plan = state["plan"]
-
-        if plan.needs_clarification or "eda" not in plan.steps:
-            return {}
-
-        results = dict(state.get("results", {}))
-        results["eda"] = perform_eda(state["df"])
-
-        return {"results": results}
+        return execute_step(
+            state,
+            "eda",
+            lambda: perform_eda(state["df"]),
+        )
 
     def ml_node(state: AnalysisState) -> dict:
         plan = state["plan"]
 
-        if plan.needs_clarification or "ml" not in plan.steps:
-            return {}
+        def train_models():
+            if plan.target_column is None or plan.task is None:
+                raise ValueError(
+                    "ML requires a target column and a task."
+                )
 
-        if plan.target_column is None or plan.task is None:
-            return {}
+            return train_and_compare_models(
+                df=state["df"],
+                target_column=plan.target_column,
+                task=plan.task,
+            )
 
-        results = dict(state.get("results", {}))
-        results["ml"] = train_and_compare_models(
-            df=state["df"],
-            target_column=plan.target_column,
-            task=plan.task,
-        )
-
-        return {"results": results}
+        return execute_step(state, "ml", train_models)
 
     graph = StateGraph(AnalysisState)
 
@@ -112,7 +144,7 @@ def run_analysis(
     df: pd.DataFrame,
     llm=None,
 ) -> dict:
-    """Run the workflow and return its plan and tool results."""
+    """Run the workflow and return the plan, results and statuses."""
 
     if df.empty:
         raise ValueError("The dataset cannot be empty.")
@@ -124,10 +156,12 @@ def run_analysis(
             "request": request,
             "df": df,
             "results": {},
+            "execution_status": {},
         }
     )
 
     return {
         "plan": final_state["plan"],
         "results": final_state.get("results", {}),
+        "execution_status": final_state.get("execution_status", {}),
     }
