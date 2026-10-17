@@ -24,3 +24,6 @@ reports/*
 .DS_Store
 .vscode/
 .idea/
+
+# Keep the small synthetic dataset used for reproducible demos
+!data/sample_customers.csv

@@ -26,7 +26,7 @@ def create_analysis_plan(
     prompt = f"""
 You are the planning component of an agentic data science platform.
 
-Create an analysis plan for the user's request and dataset.
+Return exactly one JSON object. Do not include Markdown fences or prose.
 
 USER REQUEST:
 {request}
@@ -40,21 +40,21 @@ APPROVED STEPS:
 - eda: calculate descriptive statistics, correlations and plots
 - ml: train and compare supervised machine learning models
 
-RULES:
-1. Return exactly one JSON object, without Markdown fences.
-2. Use only the approved step names.
-3. Do not invent dataset columns or claim to have analyzed data.
-4. Include profile and data_quality when appropriate.
-5. Include eda when the user asks to explore or understand the data.
-6. Include ml only when supervised prediction is requested.
-7. For ML, identify an actual target column from the available columns.
-8. Choose classification for categorical targets and regression for
-   numeric targets when that interpretation is appropriate.
-9. If the target or task is unclear, request clarification instead
-   of guessing. Do not include ml until the ambiguity is resolved.
+STRICT OUTPUT RULES:
+1. "steps" must contain only approved step names.
+2. "target_column" must be an exact column name from AVAILABLE DATASET COLUMNS or null.
+3. "task" must be exactly "classification", "regression", or null.
+4. If the user did not request supervised prediction, "task" and
+   "target_column" must both be null, and "ml" must not be in "steps".
+5. Never put a description, explanation, or analytical objective in "task".
+6. If the prediction target or task is unclear, set "needs_clarification"
+   to true, supply a "clarification_question", and omit "ml".
+7. Do not claim to have inspected data or trained models.
+8. Use "profile" and "data_quality" when appropriate.
+9. Use "eda" when the user asks to explore or understand the data.
 10. Keep steps in a sensible execution order.
 
-Required JSON fields:
+Required JSON schema:
 {{
   "objective": "string",
   "steps": ["profile", "data_quality"],
@@ -80,20 +80,19 @@ Required JSON fields:
             "Please retry the request."
         ) from exc
 
-    # Never allow the LLM to invent a target column.
-    if plan.target_column is not None:
-        if plan.target_column not in columns:
-            plan.steps = [step for step in plan.steps if step != "ml"]
-            plan.target_column = None
-            plan.task = None
-            plan.needs_clarification = True
-            plan.clarification_question = (
-                "The proposed target column is not present in the dataset. "
-                f"Available columns are: {', '.join(columns)}. "
-                "Which column should be predicted?"
-            )
+    # Validate target names independently of the LLM's claims.
+    if plan.target_column is not None and plan.target_column not in columns:
+        plan.steps = [step for step in plan.steps if step != "ml"]
+        plan.target_column = None
+        plan.task = None
+        plan.needs_clarification = True
+        plan.clarification_question = (
+            "The proposed target column is not present in the dataset. "
+            f"Available columns are: {', '.join(columns)}. "
+            "Which column should be predicted?"
+        )
 
-    # Supervised ML must have a valid target and task.
+    # Supervised ML requires both a valid target and task.
     if "ml" in plan.steps:
         if plan.target_column is None or plan.task is None:
             plan.steps = [step for step in plan.steps if step != "ml"]
@@ -104,5 +103,10 @@ Required JSON fields:
                     "Which dataset column should the model predict, "
                     "and is this a classification or regression task?"
                 )
+
+    # A task or target without an ML step is inconsistent.
+    if "ml" not in plan.steps:
+        plan.target_column = None
+        plan.task = None
 
     return plan

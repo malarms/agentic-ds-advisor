@@ -1,0 +1,16 @@
+age,monthly_charges,tenure_months,contract_type,churn
+22,49.5,3,monthly,yes
+35,75.0,24,annual,no
+28,55.0,8,monthly,yes
+46,89.0,36,annual,no
+31,65.0,12,monthly,no
+52,95.0,48,annual,no
+24,45.0,2,monthly,yes
+41,80.0,30,annual,no
+37,70.0,18,monthly,no
+29,52.0,6,monthly,yes
+56,99.0,60,annual,no
+33,68.0,14,monthly,no
+26,50.0,5,monthly,yes
+48,92.0,42,annual,no
+39,72.0,20,monthly,no
