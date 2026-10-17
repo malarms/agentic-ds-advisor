@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local data and generated reports
+data/*
+!data/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# Editor and OS
+.DS_Store
+.vscode/
+.idea/
