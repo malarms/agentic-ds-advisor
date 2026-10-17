@@ -100,3 +100,74 @@ def test_empty_request_is_rejected():
             columns=["age"],
             llm=llm,
         )
+
+class SequenceFakeLLM:
+    """Return different responses on successive calls."""
+
+    def __init__(self, responses):
+        self.responses = responses
+        self.call_count = 0
+        self.prompts = []
+
+    def invoke(self, prompt):
+        self.prompts.append(prompt)
+        response = self.responses[self.call_count]
+        self.call_count += 1
+        return FakeResponse(response)
+
+
+def test_planner_recovers_after_invalid_first_response():
+    invalid_response = json.dumps({
+        "objective": "Analyze data",
+        "steps": ["run_arbitrary_code"],
+        "target_column": None,
+        "task": None,
+        "needs_clarification": False,
+        "clarification_question": None,
+        "rationale": "Invalid step for testing.",
+    })
+
+    valid_response = json.dumps({
+        "objective": "Explore customer data",
+        "steps": ["profile", "data_quality", "eda"],
+        "target_column": None,
+        "task": None,
+        "needs_clarification": False,
+        "clarification_question": None,
+        "rationale": "The user requested exploratory analysis.",
+    })
+
+    llm = SequenceFakeLLM([invalid_response, valid_response])
+
+    plan = create_analysis_plan(
+        request="Explore this dataset",
+        columns=["age", "income", "city"],
+        llm=llm,
+    )
+
+    assert llm.call_count == 2
+    assert plan.steps == ["profile", "data_quality", "eda"]
+    assert "PREVIOUS RESPONSE WAS INVALID" in llm.prompts[1]
+
+
+def test_planner_stops_after_two_invalid_responses():
+    invalid_response = json.dumps({
+        "objective": "Analyze data",
+        "steps": ["run_arbitrary_code"],
+        "target_column": None,
+        "task": None,
+        "needs_clarification": False,
+        "clarification_question": None,
+        "rationale": "Invalid step for testing.",
+    })
+
+    llm = SequenceFakeLLM([invalid_response, invalid_response])
+
+    with pytest.raises(ValueError, match="invalid analysis plan"):
+        create_analysis_plan(
+            request="Analyze data",
+            columns=["age", "income"],
+            llm=llm,
+        )
+
+    assert llm.call_count == 2

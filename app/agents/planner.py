@@ -7,12 +7,15 @@ from app.agents.llm_client import get_llm
 from app.schemas.analysis_plan import AnalysisPlan
 
 
+MAX_PLAN_ATTEMPTS = 2
+
+
 def create_analysis_plan(
     request: str,
     columns: list[str],
     llm=None,
 ) -> AnalysisPlan:
-    """Ask an LLM to propose a validated data science plan."""
+    """Generate a validated plan, retrying invalid LLM responses once."""
 
     if not request.strip():
         raise ValueError("The analysis request cannot be empty.")
@@ -40,21 +43,21 @@ APPROVED STEPS:
 - eda: calculate descriptive statistics, correlations and plots
 - ml: train and compare supervised machine learning models
 
-STRICT OUTPUT RULES:
-1. "steps" must contain only approved step names.
-2. "target_column" must be an exact column name from AVAILABLE DATASET COLUMNS or null.
-3. "task" must be exactly "classification", "regression", or null.
-4. If the user did not request supervised prediction, "task" and
-   "target_column" must both be null, and "ml" must not be in "steps".
-5. Never put a description, explanation, or analytical objective in "task".
-6. If the prediction target or task is unclear, set "needs_clarification"
-   to true, supply a "clarification_question", and omit "ml".
-7. Do not claim to have inspected data or trained models.
-8. Use "profile" and "data_quality" when appropriate.
-9. Use "eda" when the user asks to explore or understand the data.
+STRICT RULES:
+1. Use only the approved step names.
+2. target_column must exactly match an available column or be null.
+3. task must be "classification", "regression", or null.
+4. If supervised prediction was not requested, omit "ml" and set
+   target_column and task to null.
+5. Never put a description or objective in the task field.
+6. If the target or task is unclear, set needs_clarification to true,
+   ask a clarification_question, and omit "ml".
+7. Do not claim to have executed any tools or analyzed the data.
+8. Include profile and data_quality when appropriate.
+9. Include eda when the user requests exploratory analysis.
 10. Keep steps in a sensible execution order.
 
-Required JSON schema:
+Required JSON fields:
 {{
   "objective": "string",
   "steps": ["profile", "data_quality"],
@@ -66,21 +69,45 @@ Required JSON schema:
 }}
 """
 
-    response = llm.invoke(prompt)
-    content = response.content
+    current_prompt = prompt
+    last_error = None
 
-    if not isinstance(content, str):
-        raise ValueError("The LLM response must be a text JSON object.")
+    for attempt in range(MAX_PLAN_ATTEMPTS):
+        response = llm.invoke(current_prompt)
+        content = response.content
 
-    try:
-        plan = AnalysisPlan.model_validate_json(content)
-    except (ValidationError, ValueError) as exc:
+        try:
+            if not isinstance(content, str):
+                raise ValueError(
+                    "The LLM response must be a text JSON object."
+                )
+
+            plan = AnalysisPlan.model_validate_json(content)
+
+        except (ValidationError, ValueError) as exc:
+            last_error = exc
+
+            if attempt + 1 < MAX_PLAN_ATTEMPTS:
+                current_prompt = f"""
+{prompt}
+
+YOUR PREVIOUS RESPONSE WAS INVALID.
+Validation error:
+{str(exc)}
+
+Return a corrected JSON object that follows every rule and field
+requirement above. Return JSON only. Do not explain the correction.
+"""
+            continue
+
+        break
+    else:
         raise ValueError(
-            "The LLM returned an invalid analysis plan. "
-            "Please retry the request."
-        ) from exc
+            f"The LLM returned an invalid analysis plan after "
+            f"{MAX_PLAN_ATTEMPTS} attempts. Please retry the request."
+        ) from last_error
 
-    # Validate target names independently of the LLM's claims.
+    # Never allow the LLM to invent a target column.
     if plan.target_column is not None and plan.target_column not in columns:
         plan.steps = [step for step in plan.steps if step != "ml"]
         plan.target_column = None
@@ -92,7 +119,7 @@ Required JSON schema:
             "Which column should be predicted?"
         )
 
-    # Supervised ML requires both a valid target and task.
+    # Supervised ML requires a valid target and task.
     if "ml" in plan.steps:
         if plan.target_column is None or plan.task is None:
             plan.steps = [step for step in plan.steps if step != "ml"]
@@ -104,7 +131,7 @@ Required JSON schema:
                     "and is this a classification or regression task?"
                 )
 
-    # A task or target without an ML step is inconsistent.
+    # Do not retain irrelevant ML settings when ML is not requested.
     if "ml" not in plan.steps:
         plan.target_column = None
         plan.task = None
