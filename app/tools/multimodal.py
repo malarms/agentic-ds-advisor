@@ -12,6 +12,12 @@ AUDIO_EXTENSIONS = {
 }
 
 
+def _try_idx_reader(path: str | Path) -> dict[str, Any] | None:
+    """Try to read an IDX-format image dataset (e.g., MNIST/Fashion-MNIST)."""
+    from app.tools.dataset_metadata import profile_idx_image_dataset
+    return profile_idx_image_dataset(path)
+
+
 def _files(path: str | Path, extensions: set[str]) -> list[Path]:
     root = Path(path).expanduser()
 
@@ -38,8 +44,17 @@ def _files(path: str | Path, extensions: set[str]) -> list[Path]:
 
 
 def profile_image_dataset(path: str | Path) -> dict[str, Any]:
-    """Inspect image dimensions, formats, modes, sizes, and unreadable files."""
+    """Inspect image dimensions, formats, modes, sizes, and unreadable files.
+
+    First tries to read IDX-format datasets (e.g., MNIST/Fashion-MNIST).
+    Falls back to standard image file extensions (PNG, JPEG, etc.).
+    """
     from PIL import Image, UnidentifiedImageError
+
+    # Try IDX reader first for compressed datasets like MNIST/Fashion-MNIST
+    idx_profile = _try_idx_reader(path)
+    if idx_profile is not None:
+        return idx_profile
 
     files = _files(path, IMAGE_EXTENSIONS)
     items = []
@@ -102,6 +117,31 @@ def profile_image_dataset(path: str | Path) -> dict[str, Any]:
 def perform_image_eda(path: str | Path, output_dir: str | Path = "reports") -> dict:
     """Return image-level distributions suitable for reports and recommendations."""
     profile = profile_image_dataset(path)
+
+    # Handle IDX format (e.g., MNIST/Fashion-MNIST) which has different structure
+    if profile.get("dataset_format") == "gzip_idx":
+        # Properly combine dimension counts from splits (same dimensions may appear in both)
+        dimension_counts = {}
+        for split, count in profile.get("split_counts", {}).items():
+            dims = profile.get("dimensions_by_split", {}).get(split, [])
+            if len(dims) == 2:
+                key = f"{dims[0]}x{dims[1]}"
+                dimension_counts[key] = dimension_counts.get(key, 0) + count
+
+        return {
+            "modality": "image",
+            "item_count": profile["valid_count"],
+            "items": profile.get("items", []),
+            "format_counts": {"IDX/GZIP": profile["valid_count"]},
+            "mode_counts": {},
+            "dimension_counts": dimension_counts,
+            "aspect_ratio_range": [1.0, 1.0],  # Square images for MNIST
+            "invalid_count": profile["invalid_count"],
+            "split_counts": profile.get("split_counts", {}),
+            "class_counts": profile.get("class_counts", {}),
+            "dimensions_by_split": profile.get("dimensions_by_split", {}),
+        }
+
     items = profile["items"]
 
     return {

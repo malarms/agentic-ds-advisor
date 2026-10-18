@@ -6,6 +6,7 @@ from typing import Any
 import pandas as pd
 import plotly.express as px
 import plotly.io as pio
+from plotly.offline import get_plotlyjs
 
 
 def _safe(value: Any) -> str:
@@ -18,86 +19,179 @@ def _safe(value: Any) -> str:
 
 
 def _chart_html(fig) -> str:
+    """Render a responsive Plotly chart without duplicating its JS library."""
     return pio.to_html(
         fig,
         full_html=False,
-        include_plotlyjs="cdn",
+        include_plotlyjs=False,
         config={"responsive": True, "displaylogo": False},
+        default_width="100%",
+        default_height="420px",
     )
 
 
 def _build_charts(df: pd.DataFrame) -> list[tuple[str, str]]:
+    """Build general-purpose EDA charts with optional target-aware views."""
     charts: list[tuple[str, str]] = []
+    if df is None or df.empty:
+        return charts
 
-    # Missingness across columns
+    # Missingness
     missing = (df.isna().mean() * 100).sort_values(ascending=False)
     if len(missing) and (missing > 0).any():
         missing_df = missing[missing > 0].rename("Missing (%)").reset_index()
         missing_df.columns = ["Column", "Missing (%)"]
         fig = px.bar(
-            missing_df,
-            x="Column",
-            y="Missing (%)",
-            title="Missing values by column",
-            text_auto=".1f",
+            missing_df, x="Column", y="Missing (%)",
+            title="Missing values by column", text_auto=".1f",
         )
         charts.append(("Missingness", _chart_html(fig)))
 
-    # Numeric distributions
-    numeric_columns = list(df.select_dtypes(include="number").columns[:6])
-    for column in numeric_columns:
-        values = df[column].dropna()
+    numeric_df = df.select_dtypes(include="number")
+    categorical_df = df.select_dtypes(
+        include=["object", "category", "bool", "string"]
+    )
+
+    # Numeric distributions; keep original scale and add log1p views where valid.
+    for column in numeric_df.columns[:6]:
+        values = numeric_df[column].dropna()
         if values.empty:
             continue
+
+        frame = pd.DataFrame({str(column): values})
         fig = px.histogram(
-            pd.DataFrame({str(column): values}),
-            x=str(column),
-            title=f"Distribution: {column}",
-            marginal="box",
-            opacity=0.85,
+            frame, x=str(column), title=f"Distribution: {column}",
+            marginal="box", opacity=0.85,
         )
         charts.append((f"Distribution — {column}", _chart_html(fig)))
 
-    # Categorical distributions
-    categorical_columns = [
-        column
-        for column in df.columns
-        if column not in numeric_columns
-    ][:4]
+        # Log1p is valid only when all observed values are non-negative.
+        if len(values) > 20 and values.min() >= 0 and values.skew() > 1:
+            transformed = pd.DataFrame({
+                f"log1p({column})": __import__("numpy").log1p(values)
+            })
+            fig = px.histogram(
+                transformed,
+                x=f"log1p({column})",
+                title=f"Skew-adjusted distribution: {column}",
+                labels={f"log1p({column})": f"log1p({column})"},
+            )
+            charts.append((f"Log-scaled view — {column}", _chart_html(fig)))
 
-    for column in categorical_columns:
+    # Categorical counts. Always include a likely target, even if it appears late.
+    categorical_columns = list(categorical_df.columns)
+    target_column = next(
+        (name for name in ("y", "target", "label", "outcome", "subscribed")
+         if name in df.columns and name in categorical_columns),
+        None,
+    )
+    selected_categories = categorical_columns[:4]
+    if target_column and target_column not in selected_categories:
+        selected_categories = selected_categories[:3] + [target_column]
+
+    for column in selected_categories:
         counts = (
-            df[column]
-            .fillna("(Missing)")
-            .astype(str)
-            .value_counts()
-            .head(12)
-            .rename_axis("Category")
-            .reset_index(name="Count")
+            df[column].fillna("(Missing)").astype(str)
+            .value_counts().head(12)
+            .rename_axis("Category").reset_index(name="Count")
         )
         if counts.empty:
             continue
         fig = px.bar(
-            counts.sort_values("Count"),
-            x="Count",
-            y="Category",
-            orientation="h",
-            title=f"Category counts: {column}",
-            text="Count",
+            counts.sort_values("Count"), x="Count", y="Category",
+            orientation="h", title=f"Category counts: {column}", text="Count",
         )
         charts.append((f"Categories — {column}", _chart_html(fig)))
 
-    # Correlation heatmap for numeric columns
-    numeric_df = df.select_dtypes(include="number")
+    # Target-aware charts: only when the target has a small number of classes.
+    if target_column:
+        target_values = df[target_column].fillna("(Missing)").astype(str)
+        target_counts = (
+            target_values.value_counts().rename_axis("Class")
+            .reset_index(name="Count")
+        )
+        fig = px.bar(
+            target_counts, x="Class", y="Count", text="Count",
+            title=f"Target class distribution: {target_column}",
+        )
+        charts.append(("Target class distribution", _chart_html(fig)))
+
+        classes = target_values.unique()
+        positive_class = next(
+            (value for value in ("yes", "true", "1", "positive")
+             if value in {str(item).lower() for item in classes}),
+            None,
+        )
+        if positive_class is not None:
+            actual_positive = next(
+                item for item in classes if str(item).lower() == positive_class
+            )
+            positive = (target_values == actual_positive).astype(int)
+
+            candidate_columns = [
+                column for column in categorical_columns
+                if column != target_column and df[column].nunique(dropna=False) <= 20
+            ][:5]
+
+            for column in candidate_columns:
+                frame = pd.DataFrame({
+                    "Category": df[column].fillna("(Missing)").astype(str),
+                    "Positive": positive,
+                })
+                rates = (
+                    frame.groupby("Category", dropna=False)
+                    .agg(Records=("Positive", "size"),
+                         Positive_Rate=("Positive", "mean"))
+                    .reset_index()
+                )
+                # Avoid visually noisy rates from very small groups.
+                rates = rates[rates["Records"] >= max(20, int(len(df) * 0.005))]
+                if rates.empty:
+                    continue
+                rates["Positive rate (%)"] = rates["Positive_Rate"] * 100
+                fig = px.bar(
+                    rates.sort_values("Positive rate (%)"),
+                    x="Positive rate (%)", y="Category", orientation="h",
+                    text=rates.sort_values("Positive rate (%)")["Positive rate (%)"].round(1),
+                    hover_data={"Records": True, "Positive rate (%)": ":.2f"},
+                    title=f"{actual_positive} rate by {column}",
+                )
+                charts.append((f"Target rate — {column}", _chart_html(fig)))
+
+    # Handle the Bank Marketing pdays sentinel as a special case.
+    if "pdays" in df.columns and pd.api.types.is_numeric_dtype(df["pdays"]):
+        pdays = pd.to_numeric(df["pdays"], errors="coerce")
+        status = pd.Series(
+            pdays.map(lambda value: "No previous contact (-1)"
+                      if value == -1 else
+                      "Previous contact recorded" if pd.notna(value) and value >= 0
+                      else "Other / missing"),
+            name="Previous-contact status",
+        )
+        status_counts = (
+            status.value_counts().rename_axis("Status").reset_index(name="Records")
+        )
+        fig = px.bar(
+            status_counts, x="Status", y="Records", text="Records",
+            title="Previous-contact status (pdays)",
+        )
+        charts.append(("Previous-contact status", _chart_html(fig)))
+
+        prior_days = pdays[pdays >= 0]
+        if not prior_days.empty:
+            fig = px.histogram(
+                pd.DataFrame({"Days since previous contact": prior_days}),
+                x="Days since previous contact",
+                title="Days since previous contact (excluding -1 sentinel)",
+            )
+            charts.append(("Previous-contact day distribution", _chart_html(fig)))
+
+    # Correlation heatmap for numeric columns.
     if numeric_df.shape[1] >= 2:
         corr = numeric_df.corr(numeric_only=True)
         fig = px.imshow(
-            corr,
-            text_auto=".2f",
-            aspect="auto",
-            color_continuous_scale="RdBu_r",
-            zmin=-1,
-            zmax=1,
+            corr, text_auto=".2f", aspect="auto",
+            color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
             title="Numeric feature correlations",
         )
         charts.append(("Correlations", _chart_html(fig)))
@@ -217,6 +311,11 @@ def generate_html_report(
             """
         )
 
+    # Bundle Plotly once so the report also works offline.
+    plotly_script = (
+        f"<script>{get_plotlyjs()}</script>" if charts else ""
+    )
+
     finding_sections = []
     for finding in findings:
         evidence = finding.get("evidence", {})
@@ -266,6 +365,7 @@ def generate_html_report(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{plotly_script}
 <title>Data Science Advisory Report</title>
 <style>
 :root {{

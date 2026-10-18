@@ -66,7 +66,9 @@ def test_report_contains_findings_recommendations_and_no_training_claim(tmp_path
     assert "Dataset structure" in html
     assert "Check the objective" in html
     assert "Models trained" not in html
-    assert "Plotly.newPlot" in html or "plotly" in html.lower()
+    assert "Plotly.newPlot" in html
+    assert 'height:420px' in html
+    assert 'src="https://cdn.plot.ly/plotly-' not in html
 
 
 def test_report_escapes_user_supplied_html(tmp_path):

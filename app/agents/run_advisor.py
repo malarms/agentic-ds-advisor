@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 from pathlib import Path
 
@@ -15,7 +16,17 @@ def load_tabular_dataset(path: str) -> pd.DataFrame:
 
     suffix = file_path.suffix.lower()
     if suffix == ".csv":
-        df = pd.read_csv(file_path)
+        # Detect common CSV delimiters while respecting quoted fields.
+        with file_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            sample = handle.read(65536)
+
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\\t|")
+            delimiter = dialect.delimiter
+        except csv.Error:
+            delimiter = ","
+
+        df = pd.read_csv(file_path, sep=delimiter, encoding="utf-8-sig")
     elif suffix in {".xlsx", ".xls"}:
         df = pd.read_excel(file_path)
     elif suffix == ".parquet":
