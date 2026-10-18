@@ -22,17 +22,56 @@ IDX_FILES = {
 }
 
 
+def _find_idx_files(root: Path) -> Path | None:
+    """Search recursively for a directory containing MNIST/Fashion-MNIST IDX files.
+
+    Returns the directory containing the IDX files if found, None otherwise.
+    Raises ValueError if multiple valid IDX directories are found (ambiguous).
+    """
+    idx_dirs = []
+
+    for dirpath, dirnames, filenames in root.walk():
+        dir_path = Path(dirpath)
+        # Check if this directory contains any of the expected IDX files
+        has_idx = any(
+            (dir_path / image_name).exists() or (dir_path / label_name).exists()
+            for image_name, label_name in IDX_FILES.values()
+        )
+        if has_idx:
+            idx_dirs.append(dir_path)
+
+    if not idx_dirs:
+        return None
+
+    if len(idx_dirs) > 1:
+        # Check if one is a subdirectory of another (prefer the deepest one)
+        # But if they're truly separate, it's ambiguous
+        # For now, raise an error for ambiguity
+        raise ValueError(
+            f"Multiple directories with IDX files found: {[str(d) for d in idx_dirs]}. "
+            f"Please specify the exact directory containing the IDX files."
+        )
+
+    return idx_dirs[0]
+
+
 def profile_idx_image_dataset(path: str | Path) -> dict[str, Any] | None:
     """Read standard gzip-compressed IDX image/label pairs without loading pixels.
 
     Returns None when the directory does not contain a recognized IDX dataset.
+    Searches recursively for IDX files to handle nested archive extractions.
     """
     root = Path(path).expanduser()
     if not root.is_dir():
         return None
 
+    # First try the directory directly (preserves existing behavior)
+    idx_dir = _find_idx_files(root)
+    if idx_dir is None:
+        return None
+
     present = {
-        split: (root / image_name, root / label_name)
+        split: (idx_dir / image_name, idx_dir / label_name)
         for split, (image_name, label_name) in IDX_FILES.items()
     }
     recognized = any(

@@ -138,5 +138,107 @@ def test_cleanup_on_error():
     # Note: actual cleanup verification would need filesystem inspection
 
 
+def test_idx_directory_discovery_direct():
+    """Test that profile_idx_image_dataset finds IDX files in the given directory."""
+    from app.tools.dataset_metadata import profile_idx_image_dataset
+
+    # Test with Fashion-MNIST directory
+    result = profile_idx_image_dataset("data/fashion-mnist-master/data/fashion")
+    assert result is not None
+    assert result["dataset_format"] == "gzip_idx"
+    assert result["valid_count"] == 70000
+    assert result["archive_files_discovered"] == 4
+    assert result["split_counts"]["train"] == 60000
+    assert result["split_counts"]["test"] == 10000
+
+
+def test_idx_directory_discovery_nested():
+    """Test that profile_idx_image_dataset finds IDX files in nested directories."""
+    from app.tools.dataset_metadata import profile_idx_image_dataset
+    import tempfile
+    import shutil
+    import os
+
+    # Create a temporary directory structure mimicking ZIP extraction
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create the nested structure: tmpdir/data/fashion-mnist-master/data/fashion/
+        fashion_dir = Path(tmpdir) / "data" / "fashion-mnist-master" / "data" / "fashion"
+        fashion_dir.mkdir(parents=True)
+
+        # Copy the IDX files to the nested directory
+        src_fashion = Path("data/fashion-mnist-master/data/fashion")
+        for file_name in [
+            "train-images-idx3-ubyte.gz",
+            "train-labels-idx1-ubyte.gz",
+            "t10k-images-idx3-ubyte.gz",
+            "t10k-labels-idx1-ubyte.gz"
+        ]:
+            src_file = src_fashion / file_name
+            dst_file = fashion_dir / file_name
+            shutil.copy2(src_file, dst_file)
+
+        # Test that it finds the IDX files even when given the parent directory
+        result = profile_idx_image_dataset(Path(tmpdir) / "data")
+        assert result is not None
+        assert result["dataset_format"] == "gzip_idx"
+        assert result["valid_count"] == 70000
+        assert result["archive_files_discovered"] == 4
+        assert result["split_counts"]["train"] == 60000
+        assert result["split_counts"]["test"] == 10000
+
+
+def test_idx_directory_discovery_multiple_ambiguous():
+    """Test that multiple IDX directories raise an error."""
+    from app.tools.dataset_metadata import profile_idx_image_dataset
+    import tempfile
+    import shutil
+    import pytest
+
+    # Create a temporary directory with two separate IDX sets
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+
+        # Create first IDX set
+        fashion1_dir = tmp_path / "set1"
+        fashion1_dir.mkdir()
+        src_fashion = Path("data/fashion-mnist-master/data/fashion")
+        for file_name in [
+            "train-images-idx3-ubyte.gz",
+            "train-labels-idx1-ubyte.gz",
+            "t10k-images-idx3-ubyte.gz",
+            "t10k-labels-idx1-ubyte.gz"
+        ]:
+            src_file = src_fashion / file_name
+            dst_file = fashion1_dir / file_name
+            shutil.copy2(src_file, dst_file)
+
+        # Create second IDX set
+        fashion2_dir = tmp_path / "set2"
+        fashion2_dir.mkdir()
+        for file_name in [
+            "train-images-idx3-ubyte.gz",
+            "train-labels-idx1-ubyte.gz",
+            "t10k-images-idx3-ubyte.gz",
+            "t10k-labels-idx1-ubyte.gz"
+        ]:
+            src_file = src_fashion / file_name
+            dst_file = fashion2_dir / file_name
+            shutil.copy2(src_file, dst_file)
+
+        # Test that it raises an error for ambiguous directories
+        with pytest.raises(ValueError, match="Multiple directories with IDX files found"):
+            profile_idx_image_dataset(tmp_path)
+
+
+def test_idx_directory_not_found():
+    """Test that profile_idx_image_dataset returns None when no IDX files found."""
+    from app.tools.dataset_metadata import profile_idx_image_dataset
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = profile_idx_image_dataset(tmpdir)
+        assert result is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
