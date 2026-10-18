@@ -14,11 +14,19 @@ from app.schemas.advisor import (
 from app.tools.data_quality import analyze_data_quality
 from app.tools.eda import perform_eda
 from app.tools.profiling import profile_dataset
+from app.tools.multimodal import (
+    profile_image_dataset,
+    profile_audio_dataset,
+    perform_image_eda,
+    perform_audio_eda,
+)
 
 
 class AdvisorState(TypedDict, total=False):
     request: str
-    df: pd.DataFrame
+    df: pd.DataFrame | None
+    input_path: str
+    modality: str
     dataset: DatasetSpec
     llm: Any
     reports_dir: str
@@ -42,61 +50,65 @@ def _record(state: AdvisorState, result: AgentResult) -> dict[str, Any]:
 
 
 def _supervisor(state: AdvisorState) -> dict[str, Any]:
-    """Validate the request and select the analysis path."""
-    df = state["df"]
+    """Validate input and select the appropriate modality-specific path."""
+    df = state.get("df")
+    input_path = state.get("input_path")
+    modality = state.get("modality", "tabular")
     request = state["request"].strip()
 
     if not request:
         raise ValueError("Please describe what you want to learn from this dataset.")
-    if df.empty or len(df.columns) == 0:
-        raise ValueError("The dataset must contain at least one row and one column.")
+
+    if modality == "tabular":
+        if df is None or df.empty or len(df.columns) == 0:
+            raise ValueError("The tabular dataset must contain rows and columns.")
+    elif modality in {"image", "audio"}:
+        if not input_path or not Path(input_path).exists():
+            raise ValueError("Image/audio analysis requires an existing input path.")
+    else:
+        raise ValueError(f"Unsupported modality: {modality}")
 
     lowered = request.lower()
     profile_only = any(
         phrase in lowered
         for phrase in (
-            "only profile",
-            "profile only",
-            "only data quality",
-            "data quality only",
+            "only profile", "profile only", "only data quality", "data quality only"
         )
     )
     eda_only = any(
         phrase in lowered
         for phrase in (
-            "only eda",
-            "eda only",
-            "exploratory analysis only",
+            "only eda", "eda only", "exploratory analysis only",
             "only exploratory analysis",
         )
     )
 
-    # Full advisory analysis is the default. Explicitly narrow requests
-    # can skip stages that are not relevant to the user's stated objective.
     run_eda = not profile_only
     run_strategy = not profile_only and not eda_only
 
-    decisions = ["Run dataset profiling and data-quality analysis."]
+    decisions = [f"Use the {modality} analysis adapter."]
+    decisions.append("Run dataset profiling and data-quality analysis.")
     if run_eda:
-        decisions.append("Run exploratory data analysis.")
+        decisions.append("Run modality-specific exploratory analysis.")
     else:
         decisions.append("Skip EDA because the request explicitly limits scope.")
     if run_strategy:
         decisions.append("Consider recommendations after the evidence gate.")
     else:
-        decisions.append("Skip ML strategy recommendations because the request limits scope.")
+        decisions.append("Skip strategy recommendations because the request limits scope.")
 
-    spec = DatasetSpec(
-        name="in-memory dataset",
-        modality="tabular",
+    dataset = DatasetSpec(
+        name=Path(input_path).name if input_path else "in-memory dataset",
+        modality=modality,
         objective=request,
-        row_count=len(df),
-        column_count=len(df.columns),
-        columns=[str(column) for column in df.columns],
+        row_count=len(df) if df is not None else None,
+        column_count=len(df.columns) if df is not None else None,
+        columns=[str(column) for column in df.columns] if df is not None else [],
+        metadata={"source_path": input_path} if input_path else {},
     )
 
     return {
-        "dataset": spec,
+        "dataset": dataset,
         "run_eda": run_eda,
         "run_strategy": run_strategy,
         "routing_decisions": decisions,
@@ -109,31 +121,84 @@ def _supervisor(state: AdvisorState) -> dict[str, Any]:
 
 def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
     try:
-        df = state["df"]
-        profile = profile_dataset(df)
-        quality = analyze_data_quality(df)
+        modality = state["dataset"].modality
+        df = state.get("df")
+
+        if modality == "tabular":
+            profile = profile_dataset(df)
+            quality = analyze_data_quality(df)
+            item_count = len(df)
+            structure_observation = (
+                f"The dataset contains {len(df)} rows and {len(df.columns)} columns."
+            )
+            quality_observation = (
+                "Data-quality checks were computed for missing values, duplicates, "
+                "constant columns and detected issues."
+            )
+        elif modality == "image":
+            profile = profile_image_dataset(state["input_path"])
+            quality = {
+                "files_discovered": profile["files_discovered"],
+                "valid_files": profile["valid_count"],
+                "invalid_files": profile["invalid_files"],
+            }
+            item_count = profile["valid_count"]
+            structure_observation = (
+                f"The image dataset contains {item_count} readable images."
+            )
+            quality_observation = (
+                f"Image validation found {profile['invalid_count']} unreadable "
+                f"files out of {profile['files_discovered']} discovered."
+            )
+        else:
+            profile = profile_audio_dataset(state["input_path"])
+            quality = {
+                "files_discovered": profile["files_discovered"],
+                "valid_files": profile["valid_count"],
+                "invalid_files": profile["invalid_files"],
+            }
+            item_count = profile["valid_count"]
+            structure_observation = (
+                f"The audio dataset contains {item_count} readable audio files."
+            )
+            quality_observation = (
+                f"Audio validation found {profile['invalid_count']} unreadable "
+                f"files out of {profile['files_discovered']} discovered."
+            )
+
+        dataset = state["dataset"].model_copy(
+            update={
+                "row_count": item_count,
+                "metadata": {
+                    **state["dataset"].metadata,
+                    "profile_summary": {
+                        key: value for key, value in profile.items()
+                        if key not in {"items", "invalid_files"}
+                    },
+                },
+            }
+        )
 
         findings = [
             AnalysisFinding(
                 agent="dataset_analyst",
                 title="Dataset structure",
-                observation=(
-                    f"The dataset contains {len(df)} rows and "
-                    f"{len(df.columns)} columns."
-                ),
+                observation=structure_observation,
                 evidence=profile,
             ),
             AnalysisFinding(
                 agent="dataset_analyst",
                 title="Data quality",
-                observation=(
-                    "Data-quality checks were computed for missing values, "
-                    "duplicates, constant columns and detected issues."
-                ),
+                observation=quality_observation,
                 evidence=quality,
+                limitations=[
+                    "File-level checks do not establish semantic correctness or label quality."
+                ],
             ),
         ]
+
         update = {
+            "dataset": dataset,
             "profile": profile,
             "data_quality": quality,
             "findings": [finding.model_dump(mode="json") for finding in findings],
@@ -144,7 +209,7 @@ def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
                 AgentResult(
                     agent="dataset_analyst",
                     status="success",
-                    summary="Dataset profile and data-quality checks completed.",
+                    summary=f"{modality.title()} profiling and validation completed.",
                     findings=findings,
                 ),
             )
@@ -156,7 +221,7 @@ def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
             AgentResult(
                 agent="dataset_analyst",
                 status="failed",
-                summary="Dataset profiling or data-quality analysis failed.",
+                summary="Dataset profiling or validation failed.",
                 error=f"{type(exc).__name__}: {exc}",
             ),
         )
@@ -167,28 +232,35 @@ def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
 def _eda_agent(state: AdvisorState) -> dict[str, Any]:
     try:
         output_dir = state.get("reports_dir", "reports")
-        eda = perform_eda(state["df"], output_dir=output_dir)
+        modality = state["dataset"].modality
+
+        if modality == "tabular":
+            eda = perform_eda(state["df"], output_dir=output_dir)
+        elif modality == "image":
+            eda = perform_image_eda(state["input_path"], output_dir=output_dir)
+        else:
+            eda = perform_audio_eda(state["input_path"], output_dir=output_dir)
 
         finding = AnalysisFinding(
             agent="eda_agent",
             title="Exploratory analysis",
             observation=(
-                "Numeric summaries, categorical distributions and available "
-                "correlations were computed."
+                f"Modality-specific exploratory analysis was computed for "
+                f"{eda.get('item_count', eda.get('row_count', 0))} items."
             ),
             evidence=eda,
             limitations=[
-                "EDA describes the observed sample; it does not establish causation.",
-                "A small or unrepresentative dataset may not support generalisation.",
+                "Descriptive measurements do not establish causation.",
+                "File-level statistics do not establish semantic content or label quality.",
             ],
         )
         findings = list(state.get("findings", []))
         findings.append(finding.model_dump(mode="json"))
 
         artifacts = [
-            str(path)
-            for path in Path(output_dir).glob("*")
-            if path.is_file()
+            str(file)
+            for file in Path(output_dir).glob("*")
+            if file.is_file()
         ]
         update = {"eda": eda, "findings": findings}
         update.update(
@@ -197,7 +269,7 @@ def _eda_agent(state: AdvisorState) -> dict[str, Any]:
                 AgentResult(
                     agent="eda_agent",
                     status="success",
-                    summary="Exploratory analysis completed.",
+                    summary=f"{modality.title()} exploratory analysis completed.",
                     findings=[finding],
                     artifacts=artifacts,
                 ),
@@ -291,6 +363,12 @@ def _strategy_agent(state: AdvisorState) -> dict[str, Any]:
             "findings": state.get("findings", []),
         }
 
+        valid_finding_titles = [
+            str(finding.get("title", ""))
+            for finding in state.get("findings", [])
+            if finding.get("title")
+        ]
+
         prompt = f"""
 You are the ML Strategy Agent in a data-science advisory system.
 Recommend suitable analytical and ML approaches based on the supplied evidence.
@@ -311,7 +389,7 @@ Return only a valid JSON object matching this structure:
       "title": "short recommendation title",
       "approach": "specific candidate method or family of methods",
       "rationale": "why it fits the objective and observed evidence",
-      "supporting_findings": ["exact finding titles or observations from the evidence"],
+      "supporting_findings": ["exact finding titles copied verbatim from the valid titles list"],
       "validation_strategy": "appropriate validation approach and why",
       "suggested_metrics": ["metrics appropriate to the task"],
       "risks": ["risks or assumptions to check"],
@@ -322,7 +400,12 @@ Return only a valid JSON object matching this structure:
   "clarification_questions": ["focused questions if essential information is missing"]
 }}
 
+Valid finding titles (copy these exactly; do not cite observations or invent references):
+{valid_finding_titles}
+
 Rules:
+- Every supporting_findings entry must exactly match one title in the valid finding titles list.
+- Use finding titles only, never paraphrased observations.
 - Provide 2 to 4 useful recommendations, ordered by priority.
 - Do not assume the task is supervised or that a target exists.
 - If the objective or target is unclear, ask focused questions and state assumptions.
@@ -336,26 +419,16 @@ Rules:
 
         bundle = RecommendationBundle.model_validate_json(response.content)
 
-        # Accept an exact title, observation, or exact title-plus-observation
-        # combination. Every reference must still match a generated finding.
-        findings = state.get("findings", [])
+        # Recommendations must cite exact generated finding titles.
+        # Do not accept paraphrases or arbitrary observation text.
+        valid_finding_titles = {
+            str(finding.get("title", ""))
+            for finding in state.get("findings", [])
+            if finding.get("title")
+        }
 
         def is_supported_reference(reference: str) -> bool:
-            for finding in findings:
-                title = str(finding.get("title", ""))
-                observation = str(finding.get("observation", ""))
-
-                if reference == title or reference == observation:
-                    return True
-
-                if (
-                    title
-                    and observation
-                    and reference == f"{title}: {observation}"
-                ):
-                    return True
-
-            return False
+            return reference in valid_finding_titles
 
         for recommendation in bundle.recommendations:
             unknown = [
@@ -476,24 +549,35 @@ def build_advisor_graph():
 
 def run_advisor(
     request: str,
-    df: pd.DataFrame,
+    df: pd.DataFrame | None = None,
     llm=None,
     reports_dir: str = "reports",
+    input_path: str | None = None,
+    modality: str = "tabular",
 ) -> dict[str, Any]:
-    if df.empty:
-        raise ValueError("The dataset cannot be empty.")
+    """Run advisory analysis on a DataFrame or an image/audio input path."""
+    if modality == "tabular":
+        if df is None:
+            raise ValueError("Tabular analysis requires a DataFrame.")
+        if df.empty or len(df.columns) == 0:
+            raise ValueError("The dataset cannot be empty.")
+    elif modality not in {"image", "audio"}:
+        raise ValueError(f"Unsupported modality: {modality}")
+    elif not input_path:
+        raise ValueError(f"{modality.title()} analysis requires input_path.")
 
     graph = build_advisor_graph()
-    final_state = graph.invoke(
-        {
-            "request": request,
-            "df": df,
-            "llm": llm,
-            "reports_dir": reports_dir,
-            "findings": [],
-            "agent_results": [],
-        }
-    )
+    initial_state = {
+        "request": request,
+        "df": df,
+        "input_path": input_path or "",
+        "modality": modality,
+        "llm": llm,
+        "reports_dir": reports_dir,
+        "findings": [],
+        "agent_results": [],
+    }
+    final_state = graph.invoke(initial_state)
 
     return {
         "dataset": final_state["dataset"].model_dump(mode="json"),

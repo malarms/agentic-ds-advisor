@@ -105,6 +105,91 @@ def _build_charts(df: pd.DataFrame) -> list[tuple[str, str]]:
     return charts
 
 
+def _build_modality_charts(result: dict[str, Any]) -> list[tuple[str, str]]:
+    """Build charts from measured image/audio item metadata."""
+    eda = result.get("report", {}).get("eda") or {}
+    if not eda:
+        eda = next(
+            (
+                item.get("evidence", {})
+                for item in result.get("findings", [])
+                if item.get("title") == "Exploratory analysis"
+            ),
+            {},
+        )
+
+    charts = []
+    modality = result.get("dataset", {}).get("modality")
+
+    if modality == "image":
+        items = eda.get("items", [])
+        if items:
+            frame = pd.DataFrame(items)
+            if {"width", "height"}.issubset(frame.columns):
+                frame["dimensions"] = (
+                    frame["width"].astype(str) + " × " + frame["height"].astype(str)
+                )
+                counts = frame["dimensions"].value_counts().head(15).rename_axis(
+                    "Dimensions"
+                ).reset_index(name="Images")
+                fig = px.bar(
+                    counts.sort_values("Images"),
+                    x="Images",
+                    y="Dimensions",
+                    orientation="h",
+                    title="Image dimension distribution",
+                )
+                charts.append(("Image dimensions", _chart_html(fig)))
+
+            if "file_size_bytes" in frame.columns:
+                fig = px.histogram(
+                    frame,
+                    x="file_size_bytes",
+                    title="Image file sizes",
+                    labels={"file_size_bytes": "File size (bytes)"},
+                )
+                charts.append(("Image file sizes", _chart_html(fig)))
+
+    elif modality == "audio":
+        items = eda.get("items", [])
+        if items:
+            frame = pd.DataFrame(items)
+            if "duration_seconds" in frame.columns:
+                fig = px.histogram(
+                    frame,
+                    x="duration_seconds",
+                    title="Audio duration distribution",
+                    labels={"duration_seconds": "Duration (seconds)"},
+                )
+                charts.append(("Audio durations", _chart_html(fig)))
+
+            if {"sample_rate_hz", "channels"}.issubset(frame.columns):
+                counts = frame.groupby(
+                    ["sample_rate_hz", "channels"]
+                ).size().reset_index(name="Files")
+                counts["Configuration"] = (
+                    counts["sample_rate_hz"].astype(str) + " Hz, "
+                    + counts["channels"].astype(str) + " channel(s)"
+                )
+                fig = px.bar(
+                    counts,
+                    x="Configuration",
+                    y="Files",
+                    title="Audio recording configurations",
+                )
+                charts.append(("Audio configurations", _chart_html(fig)))
+
+            if "rms_amplitude" in frame.columns:
+                fig = px.histogram(
+                    frame,
+                    x="rms_amplitude",
+                    title="Audio RMS amplitude distribution",
+                )
+                charts.append(("Audio amplitude", _chart_html(fig)))
+
+    return charts
+
+
 def generate_html_report(
     df: pd.DataFrame,
     result: dict[str, Any],
@@ -121,7 +206,8 @@ def generate_html_report(
     agents = result.get("agent_results", [])
 
     chart_sections = []
-    for index, (title, chart) in enumerate(_build_charts(df), start=1):
+    charts = _build_charts(df) if df is not None else _build_modality_charts(result)
+    for index, (title, chart) in enumerate(charts, start=1):
         chart_sections.append(
             f"""
             <section class="chart-card">
@@ -239,11 +325,11 @@ footer {{ color: var(--muted); font-size: 12px; padding: 20px 0; }}
     <h2>Dataset overview</h2>
     <div class="grid">
       <div class="card"><div class="muted">Modality</div><div class="metric">{_safe(dataset.get("modality", "unknown")).title()}</div></div>
-      <div class="card"><div class="muted">Rows / items</div><div class="metric">{_safe(dataset.get("row_count", len(df)))}</div></div>
-      <div class="card"><div class="muted">Columns / features</div><div class="metric">{_safe(dataset.get("column_count", len(df.columns)))}</div></div>
+      <div class="card"><div class="muted">Rows / items</div><div class="metric">{_safe(dataset.get("row_count") if dataset.get("row_count") is not None else (len(df) if df is not None else 0))}</div></div>
+      <div class="card"><div class="muted">Columns / features</div><div class="metric">{_safe(dataset.get("column_count") if dataset.get("column_count") is not None else (len(df.columns) if df is not None else "N/A"))}</div></div>
       
     </div>
-    <p class="muted">Columns: {_safe(dataset.get("columns", list(map(str, df.columns))))}</p>
+    <p class="muted">Columns: {_safe(dataset.get("columns") if dataset.get("columns") is not None else (list(map(str, df.columns)) if df is not None else []))}</p>
   </section>
 
   <section>

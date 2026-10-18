@@ -12,3 +12,6 @@ python-dotenv
 plotly
 openpyxl
 pyarrow
+
+Pillow
+soundfile

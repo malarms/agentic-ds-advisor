@@ -184,3 +184,48 @@ def test_unknown_finding_reference_is_rejected(sample_df, tmp_path):
 def test_advisor_rejects_empty_dataframe():
     with pytest.raises(ValueError, match="cannot be empty"):
         run_advisor("Analyse this dataset", pd.DataFrame())
+
+
+def test_image_profile_only_runs_through_advisor(tmp_path):
+    from PIL import Image
+
+    Image.new("RGB", (20, 10), (10, 20, 30)).save(tmp_path / "sample.png")
+
+    result = run_advisor(
+        request="Profile only.",
+        df=None,
+        input_path=str(tmp_path),
+        modality="image",
+        llm=UnexpectedLLM(),
+        reports_dir=str(tmp_path / "reports"),
+    )
+
+    assert result["dataset"]["modality"] == "image"
+    assert result["dataset"]["row_count"] == 1
+    assert result["advisory_status"] == "analysis_only"
+    assert result["findings"][0]["evidence"]["valid_count"] == 1
+
+
+def test_audio_profile_only_runs_through_advisor(tmp_path):
+    import wave
+    import numpy as np
+    import soundfile as sf
+
+    sample_rate = 8000
+    samples = (
+        np.sin(2 * np.pi * 440 * np.arange(sample_rate) / sample_rate) * 0.4
+    ).astype(np.float32)
+    sf.write(tmp_path / "sample.wav", samples, sample_rate)
+
+    result = run_advisor(
+        request="Profile only.",
+        df=None,
+        input_path=str(tmp_path),
+        modality="audio",
+        llm=UnexpectedLLM(),
+        reports_dir=str(tmp_path / "reports"),
+    )
+
+    assert result["dataset"]["modality"] == "audio"
+    assert result["dataset"]["row_count"] == 1
+    assert result["advisory_status"] == "analysis_only"
