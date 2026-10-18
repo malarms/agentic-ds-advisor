@@ -9,3 +9,6 @@ pytest
 langchain-openai
 langgraph
 python-dotenv
+plotly
+openpyxl
+pyarrow
