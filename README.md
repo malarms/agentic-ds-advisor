@@ -38,7 +38,9 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 
 # Set up API key (required for ML strategy recommendations)
-echo "OPENAI_API_KEY=your-key-here" > .env
+echo "FREELLMAPI_API_KEY=your-key-here" > .env
+echo "FREELLMAPI_BASE_URL=http://localhost:3001/v1" >> .env  # optional, defaults to this
+echo "FREELLMAPI_MODEL=auto" >> .env  # optional, defaults to this
 
 # Run tests
 python -m pytest tests/ -v
@@ -167,30 +169,29 @@ Open the HTML report in a browser to explore:
 | `app/tools/eda.py` | Tabular EDA |
 | `app/tools/reporting.py` | HTML report generation |
 
-## Supported Datasets (Validated)
+## Supported Modalities
 
-| Modality | Dataset | Size | Status |
-|----------|---------|------|--------|
-| **Image** | Fashion-MNIST (IDX/GZIP) | 4 archive files → 70,000 images | ✅ Full workflow |
-| **Image** | Standard PNG/JPEG folders | Variable (file-by-file) | ✅ Full workflow |
-| **Tabular** | Bank Marketing (CSV) | 45,211 rows | ✅ Full workflow |
-| **Audio** | ESC-50 (WAV) | 2,000 files | ✅ Full workflow |
+| Modality | Supported Inputs | Analysis Capabilities |
+|---|---|---|
+| **Tabular** | CSV, Excel, Parquet | Dataset profiling, data-quality checks, distributions, correlations, and target-aware EDA |
+| **Image** | PNG, JPEG, BMP, TIFF, WebP, supported IDX/GZIP formats | Image statistics, dimensions, dataset splits, class distributions, and visualizations where supported |
+| **Audio** | WAV, FLAC, OGG, AIFF | Audio metadata, duration, configuration, amplitude statistics, and EDA where supported |
 
-## Known Limitations
+## Demo Datasets
 
-1. **LLM Context Limits** — Very large datasets (e.g., 2000+ audio files) have their evidence trimmed to 50 items for the strategy agent. Full details remain in JSON output and HTML report.
+The following datasets have been tested end-to-end:
 
-2. **No Model Training** — This platform provides analysis and recommendations only. It does not train or evaluate models.
+- **Fashion-MNIST:** 70,000 images in IDX/GZIP format
+- **Bank Marketing:** 45,211 rows in CSV format
+- **ESC-50:** 2,000 WAV audio files
 
-3. **IDX Format** — Only standard MNIST/Fashion-MNIST IDX3/IDX1 format is supported (gzipped). Custom IDX variants may not work.
+## Limitations and Scope
 
-4. **Audio Metadata** — Audio analysis requires a corresponding CSV metadata file (e.g., `meta/esc50.csv`) for class labels and folds.
-
-5. **API Key Required** — ML strategy recommendations require an OpenAI-compatible API key in `.env` (via `FREELLMAPI_API_KEY`).
-
-6. **No FastAPI/PostgreSQL/RAG** — These planned features are not yet implemented (see `app/api/`, `app/database/`, `app/rag/` directories are empty).
-
-7. **Sample Image Grid** — Standard image folders (PNG/JPEG) display a 3×3 sample grid; IDX datasets do not (pixels not decoded).
+- **No model training:** The platform profiles datasets, performs EDA, and recommends ML approaches. It does not train or evaluate models.
+- **IDX compatibility:** IDX support targets standard MNIST/Fashion-MNIST IDX formats; custom variants may not be supported.
+- **Audio metadata:** Class labels and dataset folds require a compatible metadata CSV when needed for the analysis.
+- **LLM context limits:** Evidence supplied to the strategy agent is capped at 50 items to manage context size. The generated JSON and HTML reports retain full details; the strategy agent receives a summarized version with truncation noted.
+- **Planned integrations:** FastAPI, PostgreSQL, and RAG are not currently implemented.
 
 ## Project Structure
 
