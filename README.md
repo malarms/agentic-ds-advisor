@@ -12,7 +12,8 @@ An LLM-driven platform that automatically profiles datasets, performs explorator
 - **ML Strategy recommendations** — Evidence-based approach suggestions with validation strategies
 - **Interactive HTML reports** — Plotly-powered visualizations, findings, and recommendations
 - **Multi-agent workflow** — LangGraph-based orchestration with evidence gates
-- **Automated tests** — 25 tests covering all modalities and workflows
+- **Evidence provenance** — Findings tagged as measured, metadata, methodology, or assumption
+- **Automated tests** — 30 tests covering all modalities, truncation, provenance, and error handling
 
 ## Technology Stack
 
@@ -170,8 +171,8 @@ Open the HTML report in a browser to explore:
 
 | Modality | Dataset | Size | Status |
 |----------|---------|------|--------|
-| **Image** | Fashion-MNIST (IDX/GZIP) | 70,000 images | ✅ Full workflow |
-| **Image** | Standard PNG/JPEG folders | Variable | ✅ Full workflow |
+| **Image** | Fashion-MNIST (IDX/GZIP) | 4 archive files → 70,000 images | ✅ Full workflow |
+| **Image** | Standard PNG/JPEG folders | Variable (file-by-file) | ✅ Full workflow |
 | **Tabular** | Bank Marketing (CSV) | 45,211 rows | ✅ Full workflow |
 | **Audio** | ESC-50 (WAV) | 2,000 files | ✅ Full workflow |
 
@@ -185,9 +186,11 @@ Open the HTML report in a browser to explore:
 
 4. **Audio Metadata** — Audio analysis requires a corresponding CSV metadata file (e.g., `meta/esc50.csv`) for class labels and folds.
 
-5. **API Key Required** — ML strategy recommendations require an OpenAI-compatible API key in `.env`.
+5. **API Key Required** — ML strategy recommendations require an OpenAI-compatible API key in `.env` (via `FREELLMAPI_API_KEY`).
 
 6. **No FastAPI/PostgreSQL/RAG** — These planned features are not yet implemented (see `app/api/`, `app/database/`, `app/rag/` directories are empty).
+
+7. **Sample Image Grid** — Standard image folders (PNG/JPEG) display a 3×3 sample grid; IDX datasets do not (pixels not decoded).
 
 ## Project Structure
 
@@ -201,16 +204,16 @@ agentic-ds-ml/
 │   │   └── check_llm.py
 │   ├── tools/            # Analysis & reporting
 │   │   ├── multimodal.py         # Image/audio profiling + EDA
-│   │   ├── dataset_metadata.py   # IDX reader
+│   │   ├── dataset_metadata.py   # IDX/GZIP reader (MNIST/Fashion-MNIST)
 │   │   ├── profiling.py          # Tabular profiling
-│   │   ├── data_quality.py       # Quality checks
+│   │   ├── data_quality.py       # Data quality checks
 │   │   ├── eda.py                # Tabular EDA
-│   │   └── reporting.py          # HTML generation
-│   ├── schemas/          # Pydantic models
+│   │   └── reporting.py          # HTML report generation
+│   ├── schemas/          # Pydantic models (with provenance)
 │   └── api/              # (planned) FastAPI endpoints
 ├── data/                 # Sample datasets (not committed)
 ├── reports/              # Generated HTML/JSON reports
-├── tests/                # 25 pytest tests
+├── tests/                # 30 pytest tests
 ├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
@@ -224,6 +227,8 @@ agentic-ds-ml/
 ```bash
 python -m pytest tests/ -v
 ```
+
+All 30 tests pass (25 original + 5 new regression tests for evidence truncation, provenance, and finding references).
 
 ### Adding New Modalities
 
