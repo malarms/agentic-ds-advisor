@@ -352,6 +352,31 @@ def _route_after_evidence_gate(state: AdvisorState) -> str:
     return "report_agent"
 
 
+def _summarize_evidence_for_llm(evidence: dict[str, Any], max_items: int = 50) -> dict[str, Any]:
+    """Summarize evidence to fit within LLM context limits."""
+    import copy
+
+    summary = copy.deepcopy(evidence)
+
+    # Trim profile items if present and too large
+    if "profile" in summary and isinstance(summary["profile"], dict):
+        profile = summary["profile"]
+        if "items" in profile and isinstance(profile["items"], list):
+            if len(profile["items"]) > max_items:
+                profile["items"] = profile["items"][:max_items]
+                profile["_items_truncated"] = f"Showing first {max_items} of {len(profile['items'])} items"
+
+    # Trim eda items if present and too large
+    if "eda" in summary and isinstance(summary["eda"], dict):
+        eda = summary["eda"]
+        if "items" in eda and isinstance(eda["items"], list):
+            if len(eda["items"]) > max_items:
+                eda["items"] = eda["items"][:max_items]
+                eda["_items_truncated"] = f"Showing first {max_items} of {len(eda['items'])} items"
+
+    return summary
+
+
 def _strategy_agent(state: AdvisorState) -> dict[str, Any]:
     try:
         llm = state.get("llm") or get_llm()
@@ -362,6 +387,9 @@ def _strategy_agent(state: AdvisorState) -> dict[str, Any]:
             "eda": state.get("eda", {}),
             "findings": state.get("findings", []),
         }
+
+        # Summarize evidence to avoid LLM context limits with large datasets
+        evidence = _summarize_evidence_for_llm(evidence)
 
         valid_finding_titles = [
             str(finding.get("title", ""))
