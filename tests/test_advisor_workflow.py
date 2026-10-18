@@ -229,3 +229,106 @@ def test_audio_profile_only_runs_through_advisor(tmp_path):
     assert result["dataset"]["modality"] == "audio"
     assert result["dataset"]["row_count"] == 1
     assert result["advisory_status"] == "analysis_only"
+
+
+def test_evidence_truncation_records_original_count(sample_df, tmp_path):
+    """Test that evidence truncation records the original item count."""
+    from app.agents.advisor_workflow import _summarize_evidence_for_llm
+
+    # Create evidence with more than 50 items
+    evidence = {
+        "profile": {"items": [{"name": f"item_{i}"} for i in range(100)]},
+        "eda": {"items": [{"name": f"eda_{i}"} for i in range(75)]},
+    }
+
+    summary = _summarize_evidence_for_llm(evidence, max_items=50)
+
+    assert len(summary["profile"]["items"]) == 50
+    assert summary["profile"]["_items_truncated"] == "Showing first 50 of 100 items"
+    assert len(summary["eda"]["items"]) == 50
+    assert summary["eda"]["_items_truncated"] == "Showing first 50 of 75 items"
+
+
+def test_evidence_truncation_noop_when_under_limit(sample_df, tmp_path):
+    """Test that evidence is not modified when under the limit."""
+    from app.agents.advisor_workflow import _summarize_evidence_for_llm
+
+    evidence = {
+        "profile": {"items": [{"name": f"item_{i}"} for i in range(10)]},
+        "eda": {"items": [{"name": f"eda_{i}"} for i in range(5)]},
+    }
+
+    summary = _summarize_evidence_for_llm(evidence, max_items=50)
+
+    assert len(summary["profile"]["items"]) == 10
+    assert "_items_truncated" not in summary["profile"]
+    assert len(summary["eda"]["items"]) == 5
+    assert "_items_truncated" not in summary["eda"]
+
+
+def test_evidence_truncation_handles_missing_keys(sample_df, tmp_path):
+    """Test that truncation handles missing profile/eda or items keys gracefully."""
+    from app.agents.advisor_workflow import _summarize_evidence_for_llm
+
+    evidence = {
+        "profile": {},
+        "eda": {"items": [{"name": f"eda_{i}"} for i in range(100)]},
+    }
+
+    summary = _summarize_evidence_for_llm(evidence, max_items=50)
+
+    assert "profile" in summary
+    assert "_items_truncated" not in summary["profile"]
+    assert len(summary["eda"]["items"]) == 50
+    assert summary["eda"]["_items_truncated"] == "Showing first 50 of 100 items"
+
+
+def test_invalid_finding_reference_rejected_in_strategy(sample_df, tmp_path):
+    """Test that recommendations referencing non-existent findings are rejected."""
+    class BadLLM:
+        def invoke(self, prompt):
+            import json
+            return FakeResponse(json.dumps({
+                "task_interpretation": "Test",
+                "recommendations": [{
+                    "title": "Bad Rec",
+                    "approach": "Test",
+                    "rationale": "Test",
+                    "supporting_findings": ["Non-existent Finding Title"],
+                    "validation_strategy": "Test",
+                    "suggested_metrics": [],
+                    "risks": [],
+                    "next_steps": [],
+                }],
+                "assumptions": [],
+                "clarification_questions": [],
+            }))
+
+    result = run_advisor(
+        request="Recommend something.",
+        df=sample_df,
+        llm=BadLLM(),
+        reports_dir=str(tmp_path),
+    )
+
+    assert result["recommendations"] == {}
+    assert result["advisory_status"] == "partial"
+    assert any(
+        item["agent"] == "ml_strategy_agent" and item["status"] == "failed"
+        for item in result["agent_results"]
+    )
+
+
+def test_missing_evidence_in_findings_handled(sample_df, tmp_path):
+    """Test that findings without evidence dict don't break the workflow."""
+    from app.agents.advisor_workflow import _summarize_evidence_for_llm
+
+    evidence = {
+        "profile": {"items": [{"name": f"item_{i}"} for i in range(100)]},
+        "eda": None,  # Missing eda
+    }
+
+    summary = _summarize_evidence_for_llm(evidence, max_items=50)
+
+    assert len(summary["profile"]["items"]) == 50
+    assert summary["eda"] is None

@@ -362,17 +362,19 @@ def _summarize_evidence_for_llm(evidence: dict[str, Any], max_items: int = 50) -
     if "profile" in summary and isinstance(summary["profile"], dict):
         profile = summary["profile"]
         if "items" in profile and isinstance(profile["items"], list):
-            if len(profile["items"]) > max_items:
+            original_count = len(profile["items"])
+            if original_count > max_items:
                 profile["items"] = profile["items"][:max_items]
-                profile["_items_truncated"] = f"Showing first {max_items} of {len(profile['items'])} items"
+                profile["_items_truncated"] = f"Showing first {max_items} of {original_count} items"
 
     # Trim eda items if present and too large
     if "eda" in summary and isinstance(summary["eda"], dict):
         eda = summary["eda"]
         if "items" in eda and isinstance(eda["items"], list):
-            if len(eda["items"]) > max_items:
+            original_count = len(eda["items"])
+            if original_count > max_items:
                 eda["items"] = eda["items"][:max_items]
-                eda["_items_truncated"] = f"Showing first {max_items} of {len(eda['items'])} items"
+                eda["_items_truncated"] = f"Showing first {max_items} of {original_count} items"
 
     return summary
 
