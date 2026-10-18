@@ -15,3 +15,6 @@ pyarrow
 
 Pillow
 soundfile
+fastapi
+uvicorn[standard]
+python-multipart

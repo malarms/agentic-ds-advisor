@@ -22,5 +22,5 @@ COPY tests/ ./tests/
 # Create reports directory
 RUN mkdir -p reports
 
-# Default command runs tests to verify installation
-CMD ["python", "-m", "pytest", "tests/", "-v"]
+# Default command runs the FastAPI application
+CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -8,8 +8,24 @@ services:
       - ./reports:/app/reports
       - ./.env:/app/.env:ro
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY}
+      - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL}
+      - FREELLMAPI_MODEL=${FREELLMAPI_MODEL}
     command: python -m pytest tests/ -v
+
+  # FastAPI web API
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data:ro
+      - ./reports:/app/reports
+      - ./.env:/app/.env:ro
+    environment:
+      - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY}
+      - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL}
+      - FREELLMAPI_MODEL=${FREELLMAPI_MODEL}
 
   # Alternative: run the advisor CLI
   advisor:
@@ -19,6 +35,8 @@ services:
       - ./reports:/app/reports
       - ./.env:/app/.env:ro
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - FREELLMAPI_API_KEY=${FREELLMAPI_API_KEY}
+      - FREELLMAPI_BASE_URL=${FREELLMAPI_BASE_URL}
+      - FREELLMAPI_MODEL=${FREELLMAPI_MODEL}
     entrypoint: python -m app.agents.run_advisor
     command: --help
