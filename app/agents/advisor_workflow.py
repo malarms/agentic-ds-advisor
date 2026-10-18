@@ -137,19 +137,39 @@ def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
             )
         elif modality == "image":
             profile = profile_image_dataset(state["input_path"])
-            quality = {
-                "files_discovered": profile["files_discovered"],
-                "valid_files": profile["valid_count"],
-                "invalid_files": profile["invalid_files"],
-            }
-            item_count = profile["valid_count"]
-            structure_observation = (
-                f"The image dataset contains {item_count} readable images."
-            )
-            quality_observation = (
-                f"Image validation found {profile['invalid_count']} unreadable "
-                f"files out of {profile['files_discovered']} discovered."
-            )
+            if profile.get("dataset_format") == "gzip_idx":
+                # IDX format: distinguish archive files from decoded images
+                quality = {
+                    "archive_files_discovered": profile.get("archive_files_discovered", 4),
+                    "archive_files_valid": profile.get("archive_files_valid", 4),
+                    "valid_images": profile["valid_count"],
+                    "invalid_images": profile["invalid_count"],
+                }
+                item_count = profile["valid_count"]
+                structure_observation = (
+                    f"The image dataset contains {item_count} readable images "
+                    f"from {profile.get('archive_files_discovered', 4)} archive files "
+                    f"({', '.join(f'{k}: {v}' for k, v in profile.get('split_counts', {}).items())})."
+                )
+                quality_observation = (
+                    f"IDX archive validation: {profile.get('archive_files_valid', 4)}/"
+                    f"{profile.get('archive_files_discovered', 4)} archive files valid. "
+                    f"{profile['invalid_count']} unreadable images out of {item_count} decoded."
+                )
+            else:
+                quality = {
+                    "files_discovered": profile["files_discovered"],
+                    "valid_files": profile["valid_count"],
+                    "invalid_files": profile["invalid_files"],
+                }
+                item_count = profile["valid_count"]
+                structure_observation = (
+                    f"The image dataset contains {item_count} readable images."
+                )
+                quality_observation = (
+                    f"Image validation found {profile['invalid_count']} unreadable "
+                    f"files out of {profile['files_discovered']} discovered."
+                )
         else:
             profile = profile_audio_dataset(state["input_path"])
             quality = {
@@ -185,6 +205,7 @@ def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
                 title="Dataset structure",
                 observation=structure_observation,
                 evidence=profile,
+                provenance="measured",
             ),
             AnalysisFinding(
                 agent="dataset_analyst",
@@ -194,6 +215,7 @@ def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
                 limitations=[
                     "File-level checks do not establish semantic correctness or label quality."
                 ],
+                provenance="measured",
             ),
         ]
 
@@ -253,6 +275,7 @@ def _eda_agent(state: AdvisorState) -> dict[str, Any]:
                 "Descriptive measurements do not establish causation.",
                 "File-level statistics do not establish semantic content or label quality.",
             ],
+            provenance="measured",
         )
         findings = list(state.get("findings", []))
         findings.append(finding.model_dump(mode="json"))

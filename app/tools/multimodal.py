@@ -130,6 +130,7 @@ def perform_image_eda(path: str | Path, output_dir: str | Path = "reports") -> d
 
         return {
             "modality": "image",
+            "dataset_format": "gzip_idx",
             "item_count": profile["valid_count"],
             "items": profile.get("items", []),
             "format_counts": {"IDX/GZIP": profile["valid_count"]},

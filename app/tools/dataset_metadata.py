@@ -103,7 +103,8 @@ def profile_idx_image_dataset(path: str | Path) -> dict[str, Any] | None:
     return {
         "modality": "image",
         "dataset_format": "gzip_idx",
-        "files_discovered": 4,
+        "archive_files_discovered": 4,
+        "archive_files_valid": 4,
         "valid_count": total,
         "invalid_count": 0,
         "invalid_files": [],

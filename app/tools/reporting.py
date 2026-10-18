@@ -217,7 +217,53 @@ def _build_modality_charts(result: dict[str, Any]) -> list[tuple[str, str]]:
 
     if modality == "image":
         items = eda.get("items", [])
-        if items:
+
+        # Handle IDX format (e.g., MNIST/Fashion-MNIST) which has different structure
+        if eda.get("split_counts") or eda.get("class_counts"):
+            # Split distribution chart
+            if eda.get("split_counts"):
+                split_df = pd.DataFrame(
+                    [{"Split": k, "Images": v} for k, v in eda["split_counts"].items()]
+                )
+                fig = px.bar(
+                    split_df,
+                    x="Split",
+                    y="Images",
+                    title="Dataset split distribution (from IDX headers)",
+                    text="Images",
+                )
+                charts.append(("Split distribution", _chart_html(fig)))
+
+            # Class distribution chart
+            if eda.get("class_counts"):
+                class_df = pd.DataFrame(
+                    [{"Class": k, "Count": v} for k, v in eda["class_counts"].items()]
+                )
+                fig = px.bar(
+                    class_df.sort_values("Class"),
+                    x="Class",
+                    y="Count",
+                    title="Class distribution (from IDX labels)",
+                    text="Count",
+                )
+                charts.append(("Class distribution", _chart_html(fig)))
+
+            # Dimension chart (from dimension_counts)
+            if eda.get("dimension_counts"):
+                dim_df = pd.DataFrame(
+                    [{"Dimensions": k, "Images": v} for k, v in eda["dimension_counts"].items()]
+                )
+                fig = px.bar(
+                    dim_df.sort_values("Images"),
+                    x="Images",
+                    y="Dimensions",
+                    orientation="h",
+                    title="Image dimensions (from IDX headers)",
+                )
+                charts.append(("Image dimensions", _chart_html(fig)))
+
+        # Handle standard image files (PNG, JPEG, etc.)
+        elif items:
             frame = pd.DataFrame(items)
             if {"width", "height"}.issubset(frame.columns):
                 frame["dimensions"] = (
@@ -319,10 +365,15 @@ def generate_html_report(
     finding_sections = []
     for finding in findings:
         evidence = finding.get("evidence", {})
+        provenance = finding.get("provenance", "")
+        provenance_badge = (
+            f'<span class="provenance-badge provenance-{provenance}">{provenance}</span>'
+            if provenance else ""
+        )
         finding_sections.append(
             f"""
             <article class="finding-card">
-              <p class="eyebrow">{_safe(finding.get("agent", "Analysis"))}</p>
+              <p class="eyebrow">{_safe(finding.get("agent", "Analysis"))} {provenance_badge}</p>
               <h3>{_safe(finding.get("title", "Finding"))}</h3>
               <p>{_safe(finding.get("observation", ""))}</p>
               <details>
@@ -410,6 +461,11 @@ th {{ background: #edf1f8; }}
 .table-wrap {{ overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }}
 .notice {{ border: 1px solid #d8e2fb; background: #eef3ff; padding: 15px 18px; border-radius: 12px; }}
 footer {{ color: var(--muted); font-size: 12px; padding: 20px 0; }}
+.provenance-badge {{ display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; margin-left: 8px; vertical-align: middle; }}
+.provenance-measured {{ background: #d1fae5; color: #065f46; }}
+.provenance-metadata {{ background: #dbeafe; color: #1e40af; }}
+.provenance-methodology {{ background: #fef3c7; color: #92400e; }}
+.provenance-assumption {{ background: #fee2e2; color: #991b1b; }}
 @media (max-width: 480px) {{ .chart-grid {{ grid-template-columns: 1fr; }} main {{ padding: 0 12px 30px; }} }}
 </style>
 </head>

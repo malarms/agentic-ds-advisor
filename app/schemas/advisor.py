@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 Modality = Literal["tabular", "image", "audio"]
 
+Provenance = Literal["measured", "metadata", "methodology", "assumption"]
+
 
 class DatasetSpec(BaseModel):
     name: str
@@ -22,6 +24,7 @@ class AnalysisFinding(BaseModel):
     observation: str
     evidence: dict[str, Any] = Field(default_factory=dict)
     limitations: list[str] = Field(default_factory=list)
+    provenance: Provenance | None = None
 
 
 class Recommendation(BaseModel):
