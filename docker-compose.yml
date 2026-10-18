@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    volumes:
+      - ./data:/app/data:ro
+      - ./reports:/app/reports
+      - ./.env:/app/.env:ro
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    command: python -m pytest tests/ -v
+
+  # Alternative: run the advisor CLI
+  advisor:
+    build: .
+    volumes:
+      - ./data:/app/data:ro
+      - ./reports:/app/reports
+      - ./.env:/app/.env:ro
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    entrypoint: python -m app.agents.run_advisor
+    command: --help

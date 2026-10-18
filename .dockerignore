@@ -1,0 +1,52 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Reports and outputs
+reports/
+*.html
+*.json
+
+# Data files (large)
+data/
+*.csv
+*.parquet
+*.wav
+*.gz
+
+# Environment
+.env
+.env.local
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
