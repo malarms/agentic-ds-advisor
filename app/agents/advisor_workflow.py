@@ -22,12 +22,16 @@ class AdvisorState(TypedDict, total=False):
     dataset: DatasetSpec
     llm: Any
     reports_dir: str
+    run_eda: bool
+    run_strategy: bool
+    routing_decisions: list[str]
     profile: dict[str, Any]
     data_quality: dict[str, Any]
     eda: dict[str, Any]
     findings: list[dict[str, Any]]
     recommendations: dict[str, Any]
     agent_results: list[dict[str, Any]]
+    advisory_status: str
     report: dict[str, Any]
 
 
@@ -38,13 +42,49 @@ def _record(state: AdvisorState, result: AgentResult) -> dict[str, Any]:
 
 
 def _supervisor(state: AdvisorState) -> dict[str, Any]:
-    """Route the initial implementation through the tabular advisory path."""
+    """Validate the request and select the analysis path."""
     df = state["df"]
     request = state["request"].strip()
+
     if not request:
         raise ValueError("Please describe what you want to learn from this dataset.")
     if df.empty or len(df.columns) == 0:
         raise ValueError("The dataset must contain at least one row and one column.")
+
+    lowered = request.lower()
+    profile_only = any(
+        phrase in lowered
+        for phrase in (
+            "only profile",
+            "profile only",
+            "only data quality",
+            "data quality only",
+        )
+    )
+    eda_only = any(
+        phrase in lowered
+        for phrase in (
+            "only eda",
+            "eda only",
+            "exploratory analysis only",
+            "only exploratory analysis",
+        )
+    )
+
+    # Full advisory analysis is the default. Explicitly narrow requests
+    # can skip stages that are not relevant to the user's stated objective.
+    run_eda = not profile_only
+    run_strategy = not profile_only and not eda_only
+
+    decisions = ["Run dataset profiling and data-quality analysis."]
+    if run_eda:
+        decisions.append("Run exploratory data analysis.")
+    else:
+        decisions.append("Skip EDA because the request explicitly limits scope.")
+    if run_strategy:
+        decisions.append("Consider recommendations after the evidence gate.")
+    else:
+        decisions.append("Skip ML strategy recommendations because the request limits scope.")
 
     spec = DatasetSpec(
         name="in-memory dataset",
@@ -52,49 +92,63 @@ def _supervisor(state: AdvisorState) -> dict[str, Any]:
         objective=request,
         row_count=len(df),
         column_count=len(df.columns),
-        columns=[str(c) for c in df.columns],
+        columns=[str(column) for column in df.columns],
     )
+
     return {
         "dataset": spec,
+        "run_eda": run_eda,
+        "run_strategy": run_strategy,
+        "routing_decisions": decisions,
         "findings": [],
         "agent_results": [],
         "recommendations": {},
+        "advisory_status": "in_progress",
     }
 
 
 def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
     try:
-        profile = profile_dataset(state["df"])
-        quality = analyze_data_quality(state["df"])
+        df = state["df"]
+        profile = profile_dataset(df)
+        quality = analyze_data_quality(df)
+
         findings = [
             AnalysisFinding(
                 agent="dataset_analyst",
                 title="Dataset structure",
                 observation=(
-                    f"The dataset contains {len(state['df'])} rows and "
-                    f"{len(state['df'].columns)} columns."
+                    f"The dataset contains {len(df)} rows and "
+                    f"{len(df.columns)} columns."
                 ),
                 evidence=profile,
             ),
             AnalysisFinding(
                 agent="dataset_analyst",
                 title="Data quality",
-                observation="Computed data-quality checks for missing values, duplicates and constant columns.",
+                observation=(
+                    "Data-quality checks were computed for missing values, "
+                    "duplicates, constant columns and detected issues."
+                ),
                 evidence=quality,
             ),
         ]
         update = {
             "profile": profile,
             "data_quality": quality,
-            "findings": [f.model_dump(mode="json") for f in findings],
+            "findings": [finding.model_dump(mode="json") for finding in findings],
         }
-        result = AgentResult(
-            agent="dataset_analyst",
-            status="success",
-            summary="Dataset profile and data-quality checks completed.",
-            findings=findings,
+        update.update(
+            _record(
+                {**state, **update},
+                AgentResult(
+                    agent="dataset_analyst",
+                    status="success",
+                    summary="Dataset profile and data-quality checks completed.",
+                    findings=findings,
+                ),
+            )
         )
-        update.update(_record({**state, **update}, result))
         return update
     except Exception as exc:
         update = _record(
@@ -102,10 +156,11 @@ def _dataset_analyst(state: AdvisorState) -> dict[str, Any]:
             AgentResult(
                 agent="dataset_analyst",
                 status="failed",
+                summary="Dataset profiling or data-quality analysis failed.",
                 error=f"{type(exc).__name__}: {exc}",
             ),
         )
-        update["findings"] = list(state.get("findings", []))
+        update["advisory_status"] = "blocked"
         return update
 
 
@@ -113,32 +168,41 @@ def _eda_agent(state: AdvisorState) -> dict[str, Any]:
     try:
         output_dir = state.get("reports_dir", "reports")
         eda = perform_eda(state["df"], output_dir=output_dir)
-        findings = list(state.get("findings", []))
-        findings.append(
-            AnalysisFinding(
-                agent="eda_agent",
-                title="Exploratory analysis",
-                observation="Computed numeric summaries, categorical distributions and available correlations.",
-                evidence=eda,
-                limitations=[
-                    "EDA describes observed data; it does not establish causation.",
-                    "Small or unrepresentative datasets may not support reliable generalisation.",
-                ],
-            ).model_dump(mode="json")
-        )
-        result = AgentResult(
+
+        finding = AnalysisFinding(
             agent="eda_agent",
-            status="success",
-            summary="Exploratory analysis completed.",
-            findings=[AnalysisFinding.model_validate(findings[-1])],
-            artifacts=[
-                str(p)
-                for p in Path(output_dir).glob("*")
-                if p.is_file()
+            title="Exploratory analysis",
+            observation=(
+                "Numeric summaries, categorical distributions and available "
+                "correlations were computed."
+            ),
+            evidence=eda,
+            limitations=[
+                "EDA describes the observed sample; it does not establish causation.",
+                "A small or unrepresentative dataset may not support generalisation.",
             ],
         )
+        findings = list(state.get("findings", []))
+        findings.append(finding.model_dump(mode="json"))
+
+        artifacts = [
+            str(path)
+            for path in Path(output_dir).glob("*")
+            if path.is_file()
+        ]
         update = {"eda": eda, "findings": findings}
-        update.update(_record({**state, **update}, result))
+        update.update(
+            _record(
+                {**state, **update},
+                AgentResult(
+                    agent="eda_agent",
+                    status="success",
+                    summary="Exploratory analysis completed.",
+                    findings=[finding],
+                    artifacts=artifacts,
+                ),
+            )
+        )
         return update
     except Exception as exc:
         update = _record(
@@ -146,31 +210,97 @@ def _eda_agent(state: AdvisorState) -> dict[str, Any]:
             AgentResult(
                 agent="eda_agent",
                 status="failed",
+                summary="Exploratory analysis failed.",
                 error=f"{type(exc).__name__}: {exc}",
             ),
         )
+        update["advisory_status"] = "blocked"
         return update
 
 
-def _strategy_agent(state: AdvisorState) -> dict[str, Any]:
-    """Recommend strategies only. This node must never train or evaluate models."""
-    llm = state.get("llm") or get_llm()
-    evidence = {
-        "dataset": state["dataset"].model_dump(mode="json"),
-        "profile": state.get("profile", {}),
-        "data_quality": state.get("data_quality", {}),
-        "eda": state.get("eda", {}),
-        "findings": state.get("findings", []),
+def _evidence_gate(state: AdvisorState) -> dict[str, Any]:
+    """Decide whether the collected evidence supports further recommendations."""
+    results = state.get("agent_results", [])
+    status_by_agent = {
+        result["agent"]: result["status"]
+        for result in results
     }
-    prompt = f"""
+
+    required_agents = ["dataset_analyst"]
+    if state.get("run_eda", True):
+        required_agents.append("eda_agent")
+
+    failed = [
+        name for name in required_agents
+        if status_by_agent.get(name) != "success"
+    ]
+
+    if failed:
+        decisions = list(state.get("routing_decisions", []))
+        decisions.append(
+            "Evidence gate blocked recommendations because required analysis "
+            f"did not succeed: {', '.join(failed)}."
+        )
+        return {
+            "run_strategy": False,
+            "advisory_status": "blocked",
+            "routing_decisions": decisions,
+        }
+
+    if not state.get("run_strategy", True):
+        return {"advisory_status": "analysis_only"}
+
+    if not state.get("findings"):
+        decisions = list(state.get("routing_decisions", []))
+        decisions.append("Evidence gate blocked recommendations because no findings were available.")
+        return {
+            "run_strategy": False,
+            "advisory_status": "blocked",
+            "routing_decisions": decisions,
+        }
+
+    decisions = list(state.get("routing_decisions", []))
+    decisions.append("Evidence gate passed; the strategy agent may use the collected findings.")
+    return {
+        "advisory_status": "in_progress",
+        "routing_decisions": decisions,
+    }
+
+
+def _route_after_dataset_analyst(state: AdvisorState) -> str:
+    status = state.get("agent_results", [])[-1].get("status")
+    if status != "success":
+        return "evidence_gate"
+    return "eda_agent" if state.get("run_eda", True) else "evidence_gate"
+
+
+def _route_after_evidence_gate(state: AdvisorState) -> str:
+    if state.get("run_strategy", False) and state.get("advisory_status") != "blocked":
+        return "ml_strategy_agent"
+    return "report_agent"
+
+
+def _strategy_agent(state: AdvisorState) -> dict[str, Any]:
+    try:
+        llm = state.get("llm") or get_llm()
+        evidence = {
+            "dataset": state["dataset"].model_dump(mode="json"),
+            "profile": state.get("profile", {}),
+            "data_quality": state.get("data_quality", {}),
+            "eda": state.get("eda", {}),
+            "findings": state.get("findings", []),
+        }
+
+        prompt = f"""
 You are the ML Strategy Agent in a data-science advisory system.
-Your job is to recommend approaches, NOT to train models, run experiments,
-claim performance results, or invent dataset statistics.
+Recommend suitable analytical and ML approaches based on the supplied evidence.
+Do not claim that a method has been tested or that any performance has been measured.
+Never invent dataset statistics or unsupported findings.
 
 User objective:
 {state['request']}
 
-Measured dataset evidence (treat as the only source of dataset-specific facts):
+Measured dataset evidence:
 {evidence}
 
 Return only a valid JSON object matching this structure:
@@ -181,55 +311,117 @@ Return only a valid JSON object matching this structure:
       "title": "short recommendation title",
       "approach": "specific candidate method or family of methods",
       "rationale": "why it fits the objective and observed evidence",
-      "supporting_findings": ["refer to actual finding titles or observations"],
+      "supporting_findings": ["exact finding titles or observations from the evidence"],
       "validation_strategy": "appropriate validation approach and why",
       "suggested_metrics": ["metrics appropriate to the task"],
       "risks": ["risks or assumptions to check"],
-      "next_steps": ["concrete actions before modelling"]
+      "next_steps": ["concrete next actions"]
     }}
   ],
-  "assumptions": ["explicit assumptions; do not present them as facts"],
-  "clarification_questions": ["questions only if important information is missing"]
+  "assumptions": ["explicit assumptions, not facts"],
+  "clarification_questions": ["focused questions if essential information is missing"]
 }}
 
 Rules:
-- Give 2 to 4 useful recommendations, ordered by priority.
-- Do not assume a target column exists or that the task is supervised.
-- If the objective or target is unclear, say so and ask focused questions.
-- Mention baselines and trade-offs, not just model names.
-- Do not claim that any model was trained or that any metric was achieved.
-- Do not invent citations. Keep advice proportional to the evidence.
+- Provide 2 to 4 useful recommendations, ordered by priority.
+- Do not assume the task is supervised or that a target exists.
+- If the objective or target is unclear, ask focused questions and state assumptions.
+- Include baselines and trade-offs, not just algorithm names.
+- Do not report experimental results or invent citations.
 - Return JSON only, without Markdown fences.
 """
-    response = llm.invoke(prompt)
-    content = response.content
-    if not isinstance(content, str):
-        raise ValueError("The strategy agent must return a text JSON object.")
-    bundle = RecommendationBundle.model_validate_json(content)
-    update = {"recommendations": bundle.model_dump(mode="json")}
-    result = AgentResult(
-        agent="ml_strategy_agent",
-        status="success",
-        summary=f"Generated {len(bundle.recommendations)} strategy recommendations; no models were trained.",
-    )
-    update.update(_record({**state, **update}, result))
-    return update
+        response = llm.invoke(prompt)
+        if not isinstance(response.content, str):
+            raise ValueError("The strategy agent must return a text JSON object.")
+
+        bundle = RecommendationBundle.model_validate_json(response.content)
+
+        # Prevent recommendations from citing findings that the workflow never produced.
+        valid_references = set()
+        for finding in state.get("findings", []):
+            valid_references.add(str(finding.get("title", "")))
+            valid_references.add(str(finding.get("observation", "")))
+
+        for recommendation in bundle.recommendations:
+            unknown = [
+                reference
+                for reference in recommendation.supporting_findings
+                if reference not in valid_references
+            ]
+            if unknown:
+                raise ValueError(
+                    "Recommendation references unsupported findings: "
+                    + ", ".join(unknown)
+                )
+
+        update = {"recommendations": bundle.model_dump(mode="json")}
+        update.update(
+            _record(
+                {**state, **update},
+                AgentResult(
+                    agent="ml_strategy_agent",
+                    status="success",
+                    summary=(
+                        f"Generated {len(bundle.recommendations)} "
+                        "evidence-checked recommendations."
+                    ),
+                ),
+            )
+        )
+        return update
+    except Exception as exc:
+        update = _record(
+            state,
+            AgentResult(
+                agent="ml_strategy_agent",
+                status="failed",
+                summary="Recommendation generation failed.",
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+        update["recommendations"] = {}
+        update["advisory_status"] = "partial"
+        return update
 
 
 def _report_agent(state: AdvisorState) -> dict[str, Any]:
+    results = list(state.get("agent_results", []))
+    statuses = [item.get("status") for item in results]
+    recommendation_status = next(
+        (
+            item.get("status")
+            for item in reversed(results)
+            if item.get("agent") == "ml_strategy_agent"
+        ),
+        None,
+    )
+
+    if state.get("advisory_status") == "blocked":
+        final_status = "blocked"
+    elif recommendation_status == "failed" or "failed" in statuses:
+        final_status = "partial"
+    elif state.get("run_strategy", False) and state.get("recommendations"):
+        final_status = "complete"
+    else:
+        final_status = "analysis_only"
+
     report = {
         "dataset": state["dataset"].model_dump(mode="json"),
         "findings": state.get("findings", []),
         "recommendations": state.get("recommendations", {}),
-        "agent_results": state.get("agent_results", []),
-        "training_performed": False,
+        "agent_results": results,
+        "advisory_status": final_status,
+        "routing_decisions": state.get("routing_decisions", []),
     }
     result = AgentResult(
         agent="report_agent",
         status="success",
-        summary="Assembled the advisory report payload.",
+        summary=f"Report assembled with status: {final_status}.",
     )
-    update = {"report": report}
+    update = {
+        "report": report,
+        "advisory_status": final_status,
+    }
     update.update(_record({**state, **update}, result))
     return update
 
@@ -239,13 +431,29 @@ def build_advisor_graph():
     graph.add_node("supervisor", _supervisor)
     graph.add_node("dataset_analyst", _dataset_analyst)
     graph.add_node("eda_agent", _eda_agent)
+    graph.add_node("evidence_gate", _evidence_gate)
     graph.add_node("ml_strategy_agent", _strategy_agent)
     graph.add_node("report_agent", _report_agent)
 
     graph.add_edge(START, "supervisor")
     graph.add_edge("supervisor", "dataset_analyst")
-    graph.add_edge("dataset_analyst", "eda_agent")
-    graph.add_edge("eda_agent", "ml_strategy_agent")
+    graph.add_conditional_edges(
+        "dataset_analyst",
+        _route_after_dataset_analyst,
+        {
+            "eda_agent": "eda_agent",
+            "evidence_gate": "evidence_gate",
+        },
+    )
+    graph.add_edge("eda_agent", "evidence_gate")
+    graph.add_conditional_edges(
+        "evidence_gate",
+        _route_after_evidence_gate,
+        {
+            "ml_strategy_agent": "ml_strategy_agent",
+            "report_agent": "report_agent",
+        },
+    )
     graph.add_edge("ml_strategy_agent", "report_agent")
     graph.add_edge("report_agent", END)
     return graph.compile()
@@ -259,6 +467,7 @@ def run_advisor(
 ) -> dict[str, Any]:
     if df.empty:
         raise ValueError("The dataset cannot be empty.")
+
     graph = build_advisor_graph()
     final_state = graph.invoke(
         {
@@ -270,11 +479,13 @@ def run_advisor(
             "agent_results": [],
         }
     )
+
     return {
-        "dataset": final_state.get("dataset").model_dump(mode="json"),
+        "dataset": final_state["dataset"].model_dump(mode="json"),
         "findings": final_state.get("findings", []),
         "recommendations": final_state.get("recommendations", {}),
         "agent_results": final_state.get("agent_results", []),
         "report": final_state.get("report", {}),
-        "training_performed": False,
+        "advisory_status": final_state.get("advisory_status", "unknown"),
+        "routing_decisions": final_state.get("routing_decisions", []),
     }

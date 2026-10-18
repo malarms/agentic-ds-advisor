@@ -65,7 +65,7 @@ def test_report_contains_findings_recommendations_and_no_training_claim(tmp_path
     assert "Dataset analysis" in html
     assert "Dataset structure" in html
     assert "Check the objective" in html
-    assert "Models trained" in html
+    assert "Models trained" not in html
     assert "Plotly.newPlot" in html or "plotly" in html.lower()
 
 

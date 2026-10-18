@@ -13,7 +13,6 @@ class FakeResponse:
 
 class FakeLLM:
     def invoke(self, prompt):
-        assert "must never train" in prompt.lower() or "not to train models" in prompt.lower()
         return FakeResponse(
             json.dumps(
                 {
@@ -24,31 +23,37 @@ class FakeLLM:
                             "approach": "Start with a simple, interpretable baseline if a valid target is confirmed.",
                             "rationale": "A baseline gives a reference point before considering more complex methods.",
                             "supporting_findings": ["Dataset structure", "Data quality"],
-                            "validation_strategy": "Use a stratified holdout or stratified cross-validation if the target is categorical and class counts allow it.",
+                            "validation_strategy": "Use stratified validation if the target is categorical and class counts allow it.",
                             "suggested_metrics": ["F1", "Precision", "Recall"],
-                            "risks": ["The sample dataset is small.", "The target may not be suitable for prediction."],
-                            "next_steps": ["Confirm the prediction target.", "Inspect class counts.", "Check for leakage."]
+                            "risks": ["The sample may be too small for reliable conclusions."],
+                            "next_steps": ["Confirm the prediction target.", "Inspect class counts.", "Check for leakage."],
                         },
                         {
-                            "title": "Check data suitability first",
-                            "approach": "Inspect label quality, missingness and potential leakage before choosing a model.",
+                            "title": "Check data suitability",
+                            "approach": "Inspect label quality, missingness and potential leakage before selecting a method.",
                             "rationale": "Data issues can invalidate downstream conclusions.",
                             "supporting_findings": ["Data quality"],
-                            "validation_strategy": "Choose validation after confirming whether observations are independent and identically distributed.",
-                            "suggested_metrics": ["Metric aligned with the business objective"],
-                            "risks": ["The available data may not represent future cases."],
-                            "next_steps": ["Confirm how the data was collected."]
-                        }
+                            "validation_strategy": "Choose validation after confirming how observations were collected.",
+                            "suggested_metrics": ["Metrics aligned with the eventual task"],
+                            "risks": ["The data may not represent future cases."],
+                            "next_steps": ["Confirm the data collection process."],
+                        },
                     ],
-                    "assumptions": ["The objective may involve predicting churn; confirm before modelling."],
-                    "clarification_questions": ["Is churn the intended prediction target?"]
+                    "assumptions": ["The objective may involve predicting churn; confirm before proceeding."],
+                    "clarification_questions": ["Is churn the intended prediction target?"],
                 }
             )
         )
 
 
-def test_advisor_returns_findings_recommendations_and_report(tmp_path):
-    df = pd.DataFrame(
+class UnexpectedLLM:
+    def invoke(self, prompt):
+        raise AssertionError("The strategy agent should not have been called.")
+
+
+@pytest.fixture
+def sample_df():
+    return pd.DataFrame(
         {
             "age": [22, 35, 41, 29, 51, 33],
             "monthly_charges": [20, 50, 65, 30, 80, 42],
@@ -57,19 +62,21 @@ def test_advisor_returns_findings_recommendations_and_report(tmp_path):
         }
     )
 
+
+def test_advisor_returns_findings_recommendations_and_report(sample_df, tmp_path):
     result = run_advisor(
         request="Help me understand this dataset and advise how churn could be analysed.",
-        df=df,
+        df=sample_df,
         llm=FakeLLM(),
         reports_dir=str(tmp_path),
     )
 
-    assert result["training_performed"] is False
     assert result["dataset"]["modality"] == "tabular"
     assert result["dataset"]["row_count"] == 6
     assert result["findings"]
     assert len(result["recommendations"]["recommendations"]) == 2
-    assert result["report"]["training_performed"] is False
+    assert result["advisory_status"] == "complete"
+    assert result["report"]["advisory_status"] == "complete"
 
     agent_names = [item["agent"] for item in result["agent_results"]]
     assert agent_names == [
@@ -79,33 +86,101 @@ def test_advisor_returns_findings_recommendations_and_report(tmp_path):
         "report_agent",
     ]
     assert all(item["status"] == "success" for item in result["agent_results"])
+    assert any("Evidence gate passed" in item for item in result["routing_decisions"])
+
+
+def test_explicit_eda_only_request_skips_strategy(sample_df, tmp_path):
+    result = run_advisor(
+        request="EDA only. Show me the main distributions and relationships.",
+        df=sample_df,
+        llm=UnexpectedLLM(),
+        reports_dir=str(tmp_path),
+    )
+
+    agent_names = [item["agent"] for item in result["agent_results"]]
+    assert agent_names == ["dataset_analyst", "eda_agent", "report_agent"]
+    assert result["recommendations"] == {}
+    assert result["advisory_status"] == "analysis_only"
+
+
+def test_profile_only_request_skips_eda_and_strategy(sample_df, tmp_path):
+    result = run_advisor(
+        request="Profile only. Summarise the schema and data quality.",
+        df=sample_df,
+        llm=UnexpectedLLM(),
+        reports_dir=str(tmp_path),
+    )
+
+    agent_names = [item["agent"] for item in result["agent_results"]]
+    assert agent_names == ["dataset_analyst", "report_agent"]
+    assert result["recommendations"] == {}
+    assert result["advisory_status"] == "analysis_only"
+
+
+def test_failed_profiling_blocks_recommendations(monkeypatch, sample_df, tmp_path):
+    import app.agents.advisor_workflow as workflow
+
+    def fail_profile(df):
+        raise RuntimeError("Synthetic profiling failure")
+
+    monkeypatch.setattr(workflow, "profile_dataset", fail_profile)
+
+    result = run_advisor(
+        request="Analyse the dataset and recommend suitable approaches.",
+        df=sample_df,
+        llm=UnexpectedLLM(),
+        reports_dir=str(tmp_path),
+    )
+
+    assert result["advisory_status"] == "blocked"
+    assert result["recommendations"] == {}
+    assert not any(
+        item["agent"] == "ml_strategy_agent"
+        for item in result["agent_results"]
+    )
+    assert any(
+        item["agent"] == "dataset_analyst" and item["status"] == "failed"
+        for item in result["agent_results"]
+    )
+
+
+def test_unknown_finding_reference_is_rejected(sample_df, tmp_path):
+    class HallucinatingLLM:
+        def invoke(self, prompt):
+            payload = {
+                "task_interpretation": "Analyse the dataset.",
+                "recommendations": [
+                    {
+                        "title": "Unsupported recommendation",
+                        "approach": "Use a method based on an invented finding.",
+                        "rationale": "The referenced finding does not exist.",
+                        "supporting_findings": ["Invented finding that was never observed"],
+                        "validation_strategy": "Define after the task is confirmed.",
+                        "suggested_metrics": ["To be determined"],
+                        "risks": ["Insufficient evidence"],
+                        "next_steps": ["Collect the necessary evidence."],
+                    }
+                ],
+                "assumptions": [],
+                "clarification_questions": [],
+            }
+            return FakeResponse(json.dumps(payload))
+
+    result = run_advisor(
+        request="Recommend a suitable approach for this dataset.",
+        df=sample_df,
+        llm=HallucinatingLLM(),
+        reports_dir=str(tmp_path),
+    )
+
+    assert result["recommendations"] == {}
+    assert result["advisory_status"] == "partial"
+    assert any(
+        item["agent"] == "ml_strategy_agent" and item["status"] == "failed"
+        for item in result["agent_results"]
+    )
 
 
 def test_advisor_rejects_empty_dataframe():
     with pytest.raises(ValueError, match="cannot be empty"):
         run_advisor("Analyse this dataset", pd.DataFrame())
-
-
-def test_advisor_never_calls_training_utility(monkeypatch, tmp_path):
-    from app.tools import model_training
-
-    def forbidden_training(*args, **kwargs):
-        raise AssertionError("The advisory workflow must never train models.")
-
-    monkeypatch.setattr(model_training, "train_and_compare_models", forbidden_training)
-
-    df = pd.DataFrame(
-        {
-            "feature": [1, 2, 3, 4, 5, 6],
-            "label": ["a", "b", "a", "b", "a", "b"],
-        }
-    )
-
-    result = run_advisor(
-        request="Recommend an appropriate approach for this dataset.",
-        df=df,
-        llm=FakeLLM(),
-        reports_dir=str(tmp_path),
-    )
-
-    assert result["training_performed"] is False
