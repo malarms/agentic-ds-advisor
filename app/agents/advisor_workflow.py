@@ -336,17 +336,32 @@ Rules:
 
         bundle = RecommendationBundle.model_validate_json(response.content)
 
-        # Prevent recommendations from citing findings that the workflow never produced.
-        valid_references = set()
-        for finding in state.get("findings", []):
-            valid_references.add(str(finding.get("title", "")))
-            valid_references.add(str(finding.get("observation", "")))
+        # Accept an exact title, observation, or exact title-plus-observation
+        # combination. Every reference must still match a generated finding.
+        findings = state.get("findings", [])
+
+        def is_supported_reference(reference: str) -> bool:
+            for finding in findings:
+                title = str(finding.get("title", ""))
+                observation = str(finding.get("observation", ""))
+
+                if reference == title or reference == observation:
+                    return True
+
+                if (
+                    title
+                    and observation
+                    and reference == f"{title}: {observation}"
+                ):
+                    return True
+
+            return False
 
         for recommendation in bundle.recommendations:
             unknown = [
                 reference
                 for reference in recommendation.supporting_findings
-                if reference not in valid_references
+                if not is_supported_reference(reference)
             ]
             if unknown:
                 raise ValueError(

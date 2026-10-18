@@ -46,7 +46,7 @@ def main():
 
     df = load_tabular_dataset(args.file)
     print(f"Loaded {args.file}: {len(df)} rows, {len(df.columns)} columns")
-    print("Running advisory workflow. No models will be trained.")
+    print("Running advisory workflow.")
 
     result = run_advisor(
         request=args.request,
@@ -70,7 +70,6 @@ def main():
     print(f"Modality: {result['dataset']['modality']}")
     print(f"Findings: {len(result['findings'])}")
     print(f"Recommendations: {len(result['recommendations'].get('recommendations', []))}")
-    print("Models trained: No")
     print(f"JSON results: {json_path}")
     print(f"HTML report: {html_path}")
 
