@@ -3,7 +3,11 @@
 import io
 import json
 import tempfile
+import sys
 from pathlib import Path
+
+# Add the app directory to the path so we can import from it
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 from fastapi.testclient import TestClient

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic Data Science Advisor</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Agentic Data Science Advisor</h1>
+            <p>Upload a dataset to get automated profiling, EDA, and ML strategy recommendations</p>
+        </header>
+
+        <main>
+            <form id="analysisForm" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="datasetFile">Dataset File</label>
+                    <input type="file" id="datasetFile" name="file" required accept=".csv,.xlsx,.xls,.parquet,.png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp,.wav,.flac,.ogg,.aiff,.aif,.zip">
+                    <small>Supported formats: CSV, Excel, Parquet, PNG, JPEG, BMP, TIFF, WebP, WAV, FLAC, OGG, AIFF, ZIP archives</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="request">Analysis Objective</label>
+                    <textarea id="request" name="request" rows="4" placeholder="What do you want to understand or decide about this dataset?" required></textarea>
+                    <small>Describe your goal in natural language (e.g., "Predict customer churn", "Recommend ML approaches for image classification")</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="modality">Modality (optional)</label>
+                    <select id="modality" name="modality">
+                        <option value="">Auto-detect from file extension</option>
+                        <option value="tabular">Tabular (CSV/Excel/Parquet)</option>
+                        <option value="image">Image (PNG/JPEG/etc.)</option>
+                        <option value="audio">Audio (WAV/FLAC/etc.)</option>
+                    </select>
+                    <small>Leave blank for automatic detection based on file extension</small>
+                </div>
+
+                <button type="submit" id="submitBtn">Run Analysis</button>
+            </form>
+
+            <div id="loading" class="hidden">
+                <div class="spinner"></div>
+                <p>Analysis in progress...</p>
+                <p><small>This may take a moment for larger datasets</small></p>
+            </div>
+
+            <div id="results" class="hidden">
+                <h2>Analysis Results</h2>
+                <div class="summary">
+                    <div class="metric">
+                        <h3>Modality</h3>
+                        <p id="resultModality"></p>
+                    </div>
+                    <div class="metric">
+                        <h3>Findings</h3>
+                        <p id="resultFindings"></p>
+                    </div>
+                    <div class="metric">
+                        <h3>Recommendations</h3>
+                        <p id="resultRecommendations"></p>
+                    </div>
+                    <div class="metric">
+                        <h3>Status</h3>
+                        <p id="resultStatus"></p>
+                    </div>
+                </div>
+
+                <div class="download-links">
+                    <h3>Download Reports</h3>
+                    <a id="htmlLink" href="#" class="btn btn-primary">HTML Report</a>
+                    <a id="jsonLink" href="#" class="btn btn-secondary">JSON Results</a>
+                </div>
+
+                <div id="errorMessage" class="alert alert-error hidden"></div>
+                <div id="successMessage" class="alert alert-success hidden"></div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Agentic Data Science Advisor &copy; 2026</p>
+        </footer>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

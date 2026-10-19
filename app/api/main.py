@@ -13,6 +13,7 @@ from typing import Literal, Optional
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.agents.run_advisor import load_tabular_dataset
 from app.agents.advisor_workflow import run_advisor
@@ -33,6 +34,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static files for the frontend
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # Base directory for temporary reports
 REPORTS_BASE = Path("reports")
@@ -170,7 +174,12 @@ async def analyze_dataset(
         if not html_path.exists():
             generate_html_report(df=df, result=result, output_path=str(html_path))
 
+        # Write JSON results to disk
         json_path = work_dir / "advisor_results.json"
+        json_path.write_text(
+            json.dumps(result, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
 
         return JSONResponse(
             content={
@@ -241,27 +250,13 @@ async def health_check():
     return {"status": "ok"}
 
 
-@app.get("/reports/{run_id}/advisor_report.html", response_class=HTMLResponse)
-async def get_html_report(run_id: str):
-    """Serve the generated HTML report."""
-    html_path = REPORTS_BASE / run_id / "advisor_report.html"
-    if not html_path.exists():
-        raise HTTPException(status_code=404, detail="Report not found.")
-    return FileResponse(html_path, media_type="text/html")
-
-
-@app.get("/reports/{run_id}/advisor_results.json", response_class=JSONResponse)
-async def get_json_report(run_id: str):
-    """Serve the generated JSON results."""
-    json_path = REPORTS_BASE / run_id / "advisor_results.json"
-    if not json_path.exists():
-        raise HTTPException(status_code=404, detail="JSON results not found.")
-    return FileResponse(json_path, media_type="application/json")
-
-
-@app.get("/health")
-async def health_check():
-    return {"status": "ok"}
+@app.get("/")
+async def serve_frontend():
+    """Serve the frontend HTML page."""
+    html_path = Path("app/static/index.html")
+    if html_path.exists():
+        return FileResponse(html_path, media_type="text/html")
+    return HTMLResponse(content="<h1>Frontend not found</h1>", status_code=404)
 
 
 if __name__ == "__main__":
