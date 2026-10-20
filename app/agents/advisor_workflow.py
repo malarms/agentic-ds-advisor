@@ -399,6 +399,17 @@ def _summarize_evidence_for_llm(evidence: dict[str, Any], max_items: int = 50) -
                 eda["items"] = eda["items"][:max_items]
                 eda["_items_truncated"] = f"Showing first {max_items} of {original_count} items"
 
+    # Trim findings' evidence items if present and too large
+    if "findings" in summary and isinstance(summary["findings"], list):
+        for finding in summary["findings"]:
+            if "evidence" in finding and isinstance(finding["evidence"], dict):
+                evidence = finding["evidence"]
+                if "items" in evidence and isinstance(evidence["items"], list):
+                    original_count = len(evidence["items"])
+                    if original_count > max_items:
+                        evidence["items"] = evidence["items"][:max_items]
+                        evidence["_items_truncated"] = f"Showing first {max_items} of {original_count} items"
+
     return summary
 
 
