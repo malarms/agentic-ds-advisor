@@ -200,23 +200,7 @@ Each run generates:
 | **Image** | PNG, JPEG, BMP, TIFF, WebP, IDX/GZIP | Statistics, dimensions, splits, class distributions, visualizations |
 | **Audio** | WAV, FLAC, OGG, AIFF | Metadata, duration, configuration, amplitude statistics, EDA |
 
-## Demo Datasets (not included)
 
-- **Fashion-MNIST** — 70,000 images in IDX/GZIP format
-- **Bank Marketing** — 45,211 rows CSV
-- **ESC-50** — 2,000 WAV audio files
-
-> **Note:** Datasets are not included. Download separately and place in `data/`.
-
-## Scope & Future Improvements
-
-- **No model training** — The platform profiles data, performs EDA, and recommends ML approaches. It does not train or evaluate models.
-- **IDX support** — Standard MNIST/Fashion-MNIST IDX formats; custom variants may not work.
-- **Audio metadata** — Class labels and folds require a compatible metadata CSV.
-- **LLM context limits** — Evidence capped at 50 items per collection. Full details retained in JSON/HTML reports; strategy agent receives summarized version.
-- **Large image directories** — 300+ individual image files may exceed LLM context even after truncation. Compressed IDX format (Fashion-MNIST) works around this.
-- **No model training/evaluation** — Platform provides analysis and recommendations only.
-- **Planned integrations** — FastAPI, PostgreSQL, RAG are not currently implemented beyond basic API endpoints.
 
 ## Project Structure
 
